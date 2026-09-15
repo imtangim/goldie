@@ -24,8 +24,10 @@ const config: GoldieConfig = {
   // their selectors match. The emulator must already be running.
   // android: { appPath: "/path/to/app-release.apk", applicationId: "com.example.app" },
 
-  devices: ["iphone-6.9"],       // keys from $GOLDIE/src/specs.ts; "pixel-10-pro" for Google Play
+  devices: ["iphone-6.9"],       // keys from $GOLDIE/src/specs.ts; "pixel-10-pro" / "pixel-tablet" for Google Play
   locales: ["en-US"],
+  // localizedCapture: true,     // capture each locale with the device in that language
+  // fonts: [{ family: "Noto Sans Bengali", files: { 400: "fonts/NotoSansBengali-Regular.ttf", 700: "fonts/NotoSansBengali-Bold.ttf" } }],
   appearance: "light",           // simulator appearance for every capture
 
   // Bundled bezels: "17-pro-silver" | "17-pro-blue" | "17-pro-orange".
@@ -41,7 +43,9 @@ const config: GoldieConfig = {
     subheadColor: "#5A6A7D",     // light text on a dark background and vice versa
     // The system stack, or a bundled typeface named first: "Merriweather",
     // "DM Mono", "Lato", "DM Sans", "Montserrat" (files in $GOLDIE/assets/fonts).
+    // Or a custom family from `fonts` above.
     fontFamily: '-apple-system, "SF Pro Display", system-ui, sans-serif',
+    // localeFonts: { "bn-BD": '"Noto Sans Bengali", sans-serif' },  // per-locale font stacks
     copyHeightRatio: 0.24,       // fraction of frame height reserved for copy (classic layout)
     deviceWidthRatio: 0.84,      // fraction of frame width the bezel occupies (classic layout)
     template: "editorial",       // the strip's rhythm, see "Templates and layouts" below
@@ -73,6 +77,7 @@ const config: GoldieConfig = {
       kind: "screenshot",
       id: "issues",
       flow: "store-01-issues",
+      // localeFlows: { "de-DE": "store-01-issues-de" },  // per-locale flow when selectors use visible text
       headline: { "en-US": "Every issue, one list" },
       subhead: { "en-US": "Grouped by status, sorted the way your team works." },
       // background: "..."     optional per-scene override

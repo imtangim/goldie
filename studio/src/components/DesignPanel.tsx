@@ -1,11 +1,12 @@
-import { CheckIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CheckIcon, Loader2Icon, UploadIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Design, LayoutEntry } from "../manifest";
+import type { BundledFont, Design, LayoutEntry } from "../manifest";
 import { FontPicker } from "./FontPicker";
 import { Field, Select } from "./Sidebar";
 import { TemplatePicker } from "./TemplatePicker";
@@ -124,6 +125,108 @@ const FRAME_META: Record<string, { label: string; tint: string }> = {
   "17-pro-orange": { label: "Cosmic Orange", tint: "#E0662F" },
 };
 
+/** The locale font picker's "use the default font" choice; Radix Select cannot hold "". */
+const FOLLOW_DEFAULT = "__default__";
+
+/**
+ * Adds a custom typeface: a TTF/OTF (or WOFF2 for the preview only) per
+ * weight. Headlines render at 700 and subheads at 400, so a family usually
+ * wants both. The file is stored next to the config and listed in
+ * goldie.design.json, so exports pick it up too.
+ */
+function FontUpload({
+  onUpload,
+  onUploaded,
+}: {
+  onUpload: (file: File, family: string, weight: number) => Promise<BundledFont>;
+  /** Called with the new font's stack after its first upload, to select it. */
+  onUploaded: (stack: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [family, setFamily] = useState("");
+  const [weight, setWeight] = useState("700");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+
+  const pick = (f: File | null) => {
+    setFile(f);
+    setError(null);
+    if (f && !family) {
+      // "NotoSansBengali-Bold.ttf" -> "Noto Sans Bengali"
+      const base = f.name.replace(/\.[^.]+$/, "").split(/[-_]/)[0] ?? "";
+      setFamily(base.replace(/([a-z])([A-Z])/g, "$1 $2"));
+      if (/bold|700/i.test(f.name)) setWeight("700");
+      else if (/regular|400|book/i.test(f.name)) setWeight("400");
+    }
+  };
+
+  async function submit() {
+    if (!file || !family.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const font = await onUpload(file, family.trim(), Number(weight));
+      onUploaded(`"${font.family}", ${font.fallback}`);
+      setFile(null);
+      if (input.current) input.current.value = "";
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="mt-1 flex items-center gap-1.5 self-start text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          <UploadIcon className="size-3" aria-hidden />
+          Upload a font
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="flex w-64 flex-col gap-2.5 p-3">
+        <input
+          ref={input}
+          type="file"
+          accept=".ttf,.otf,.ttc,.woff,.woff2"
+          onChange={(e) => pick(e.target.files?.[0] ?? null)}
+          className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs"
+        />
+        <Input
+          value={family}
+          onChange={(e) => setFamily(e.target.value)}
+          placeholder="Family name"
+          className="h-8 text-xs"
+        />
+        <Select
+          size="sm"
+          value={weight}
+          onChange={setWeight}
+          options={[
+            ["400", "Regular (subhead)"],
+            ["500", "Medium"],
+            ["600", "Semibold"],
+            ["700", "Bold (headline)"],
+          ]}
+        />
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          Upload the bold and regular cuts separately under one family. Exports need TTF or OTF.
+        </p>
+        {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+        <Button size="sm" onClick={submit} disabled={!file || !family.trim() || busy}>
+          {busy ? <Loader2Icon className="animate-spin" /> : null}
+          Add font
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** The studio's "System" font choice; mirrors SYSTEM_FONT in src/fonts.ts. */
 const SYSTEM_FONT = '-apple-system, "SF Pro Display", system-ui, sans-serif';
 
@@ -133,6 +236,12 @@ export function DesignPanel({
   background,
   frame,
   fontFamily,
+  fonts,
+  locale,
+  locales,
+  localeFont,
+  onLocaleFont,
+  onUploadFont,
   template,
   layout,
   screenOnly,
@@ -149,6 +258,14 @@ export function DesignPanel({
   background: string;
   frame: string;
   fontFamily: string;
+  /** Every font the picker offers: bundled, config and uploaded. */
+  fonts: BundledFont[];
+  locale: string;
+  locales: string[];
+  /** The current locale's font stack; "" follows fontFamily. */
+  localeFont: string;
+  onLocaleFont: (v: string) => void;
+  onUploadFont: (file: File, family: string, weight: number) => Promise<BundledFont>;
   template: string;
   layout: string;
   screenOnly: boolean;
@@ -161,13 +278,22 @@ export function DesignPanel({
 }) {
   // Each choice is a full CSS font stack, so the Strip can use it as-is. A
   // config stack that matches none of them shows as "custom (from config)".
-  const fontOptions: Array<[string, string]> = [
+  const baseOptions: Array<[string, string]> = [
     [SYSTEM_FONT, "System (SF Pro)"],
-    ...design.fonts.map((f): [string, string] => [`"${f.family}", ${f.fallback}`, f.family]),
+    ...fonts.map((f): [string, string] => [
+      `"${f.family}", ${f.fallback}`,
+      f.custom ? `${f.family} (custom)` : f.family,
+    ]),
   ];
-  if (!fontOptions.some(([css]) => css === fontFamily)) {
-    fontOptions.push([fontFamily, "custom (from config)"]);
-  }
+  const withCurrent = (value: string) =>
+    !value || baseOptions.some(([css]) => css === value)
+      ? baseOptions
+      : [...baseOptions, [value, "custom (from config)"] as [string, string]];
+  const fontOptions = withCurrent(fontFamily);
+  const localeFontOptions: Array<[string, string]> = [
+    [FOLLOW_DEFAULT, "Same as default font"],
+    ...withCurrent(localeFont),
+  ];
 
   const bgName = backgroundName(background);
   // The tab only tracks which palette the user is browsing; a hex background
@@ -233,6 +359,17 @@ export function DesignPanel({
 
       <Field label="Font">
         <FontPicker value={fontFamily} onChange={onFontFamily} options={fontOptions} />
+        {locales.length > 1 ? (
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Font for {locale}</span>
+            <FontPicker
+              value={localeFont || FOLLOW_DEFAULT}
+              onChange={(v) => onLocaleFont(v === FOLLOW_DEFAULT ? "" : v)}
+              options={localeFontOptions}
+            />
+          </div>
+        ) : null}
+        <FontUpload onUpload={onUploadFont} onUploaded={onFontFamily} />
       </Field>
 
       <Field label="Template">

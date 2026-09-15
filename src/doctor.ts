@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import * as argent from "./argent.ts";
-import { flowPath, type LoadedConfig } from "./config.ts";
+import { canvasFontFiles, flowPath, isScreenshot, type LoadedConfig } from "./config.ts";
 import * as device from "./device.ts";
 import { exec } from "./exec.ts";
 import { DEVICES } from "./specs.ts";
@@ -30,7 +30,7 @@ export async function doctor(cfg: LoadedConfig): Promise<boolean> {
       name: "macOS host",
       ok: mac,
       detail: mac ? process.platform : `${process.platform}: iOS simulators run only on macOS`,
-      fix: "Run goldie on a Mac, or keep only android devices (pixel-10-pro) in `devices`",
+      fix: "Run goldie on a Mac, or keep only android devices (pixel-10-pro, pixel-tablet) in `devices`",
     });
     checks.push({
       name: "xcrun",
@@ -166,7 +166,10 @@ export async function doctor(cfg: LoadedConfig): Promise<boolean> {
   });
 
   for (const scene of cfg.scenes) {
-    const flows = scene.kind === "preview" ? scene.segments.map((s) => s.flow) : [scene.flow];
+    const items = scene.kind === "preview" ? scene.segments : [scene];
+    const flows = new Set(
+      items.flatMap((item) => [item.flow, ...Object.values(item.localeFlows ?? {})]),
+    );
     for (const f of flows) {
       const path = flowPath(cfg, f);
       checks.push({
@@ -178,6 +181,63 @@ export async function doctor(cfg: LoadedConfig): Promise<boolean> {
     }
   }
 
+  // Every locale needs its copy; frame would otherwise stop at the first gap.
+  const missing: string[] = [];
+  for (const scene of cfg.scenes.filter(isScreenshot)) {
+    for (const locale of cfg.locales) {
+      if (scene.headline[locale] === undefined) missing.push(`${scene.id} headline [${locale}]`);
+      if (scene.subhead && scene.subhead[locale] === undefined)
+        missing.push(`${scene.id} subhead [${locale}]`);
+      for (const d of [...(cfg.theme.decorations ?? []), ...(scene.decorations ?? [])]) {
+        if (d.kind === "badge" && d.text[locale] === undefined)
+          missing.push(`${scene.id} badge "${Object.values(d.text)[0]}" [${locale}]`);
+      }
+    }
+  }
+  checks.push({
+    name: "translations",
+    ok: missing.length === 0,
+    detail:
+      missing.length === 0
+        ? `${cfg.locales.length} locale(s): ${cfg.locales.join(", ")}`
+        : `missing ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? ` and ${missing.length - 6} more` : ""}`,
+    fix: "Add the missing entries in goldie.config.ts, or edit the copy per locale in goldie studio",
+  });
+
+  for (const font of canvasFontFiles(cfg)) {
+    checks.push({
+      name: `font ${font.family}`,
+      ok: font.files.length > 0,
+      detail: font.files.length > 0 ? `${font.files.length} file(s)` : "no TTF or OTF file",
+      fix: "The exporter's canvas reads TTF/OTF only; add one next to any WOFF2",
+    });
+  }
+
+  // Copy in a script none of the stack's fonts cover exports as tofu boxes.
+  for (const locale of cfg.locales) {
+    const script = nonLatinScript(locale);
+    if (!script) continue;
+    const stack = cfg.theme.localeFonts?.[locale] ?? "";
+    const covered = stack !== "" || (cfg.fonts ?? []).length > 0 || script === "CJK";
+    checks.push({
+      name: `font for ${locale}`,
+      ok: covered,
+      warnOnly: true,
+      detail: covered
+        ? stack || "custom fonts act as glyph fallbacks"
+        : `${script} copy with no custom font; the export may draw empty boxes`,
+      fix: `Add a ${script} typeface to \`fonts\` and set theme.localeFonts["${locale}"] (e.g. a Noto Sans ${script} TTF)`,
+    });
+  }
+
+  if (cfg.localizedCapture && cfg.locales.length > 1) {
+    checks.push({
+      name: "localized capture",
+      ok: true,
+      detail: `captures run once per locale (${cfg.locales.length}x capture time)`,
+    });
+  }
+
   let allOk = true;
   for (const c of checks) {
     if (!c.ok && !c.warnOnly) allOk = false;
@@ -186,4 +246,38 @@ export async function doctor(cfg: LoadedConfig): Promise<boolean> {
     if (!c.ok && c.fix) console.log(`       fix: ${c.fix}`);
   }
   return allOk;
+}
+
+/** The script a locale writes in when the bundled latin faces cannot draw it, else null. */
+function nonLatinScript(locale: string): string | null {
+  const language = locale.toLowerCase().split(/[-_]/)[0]!;
+  const scripts: Record<string, string> = {
+    bn: "Bengali",
+    as: "Bengali",
+    hi: "Devanagari",
+    mr: "Devanagari",
+    ne: "Devanagari",
+    ar: "Arabic",
+    fa: "Arabic",
+    ur: "Arabic",
+    he: "Hebrew",
+    th: "Thai",
+    ta: "Tamil",
+    te: "Telugu",
+    kn: "Kannada",
+    ml: "Malayalam",
+    gu: "Gujarati",
+    pa: "Gurmukhi",
+    si: "Sinhala",
+    km: "Khmer",
+    lo: "Lao",
+    my: "Myanmar",
+    ka: "Georgian",
+    hy: "Armenian",
+    am: "Ethiopic",
+    zh: "CJK",
+    ja: "CJK",
+    ko: "Korean",
+  };
+  return scripts[language] ?? null;
 }

@@ -20,11 +20,12 @@ import {
   isPreview,
   isScreenshot,
   type LoadedConfig,
+  rawDir,
   type Theme,
   variantFramePath,
 } from "./config.ts";
 import { execOrThrow } from "./exec.ts";
-import { FONTS, fontFilePath } from "./fonts.ts";
+import { customFontKey, FONTS, fontFilePath } from "./fonts.ts";
 import { imageSize } from "./image.ts";
 import { type FrameGeometry, LAYOUTS, TEMPLATES } from "./layouts.ts";
 import { DEVICES, type DeviceKey } from "./specs.ts";
@@ -57,6 +58,7 @@ export type StoreManifest = {
     key: DeviceKey;
     label: string;
     platform: "ios" | "android";
+    formFactor: "phone" | "tablet";
     simulatorName: string | null;
     screenshot: { width: number; height: number };
     preview: { width: number; height: number } | null;
@@ -84,6 +86,8 @@ export type StoreManifest = {
       family: string;
       fallback: string;
       faces: Array<{ weight: number; url: string }>;
+      /** From the config's `fonts` (or uploaded in the studio) rather than bundled with goldie. */
+      custom?: boolean;
     }>;
     /** Every layout the studio can pick, in menu order. */
     layouts: Array<{ key: string; label: string; description: string; span: number }>;
@@ -107,15 +111,20 @@ export type StoreManifest = {
       sceneId: string;
       segments: Array<{ id: string }>;
     } | null;
-    /** Raw capture urls per device key; a device is absent until `goldie capture` ran. */
-    captures: Record<
-      string,
-      {
-        screenshots: Array<{ sceneId: string; url: string }>;
-        clips: Array<{ segmentId: string; url: string; durationSeconds: number }> | null;
-      }
-    >;
+    /**
+     * Raw capture urls per device key; a device is absent until `goldie
+     * capture` ran. The shared capture, or with only localized captures the
+     * first locale's, so a locale without its own still shows something.
+     */
+    captures: Record<string, DeviceCaptures>;
+    /** Localized captures per device key, then locale (localizedCapture). */
+    localeCaptures: Record<string, Record<string, DeviceCaptures>>;
   };
+};
+
+export type DeviceCaptures = {
+  screenshots: Array<{ sceneId: string; url: string }>;
+  clips: Array<{ segmentId: string; url: string; durationSeconds: number }> | null;
 };
 
 export type LocaleAssets = {
@@ -156,7 +165,7 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
   if (custom) await copyFile(framePath(cfg), join(webDir, custom));
 
   // Bezel art a device brings itself, copied under its device key: the
-  // android Pixel art, which the frame picker does not apply to.
+  // android Pixel phone and tablet art, which the frame picker does not apply to.
   const deviceFrames: Record<string, { url: string; geom: FrameGeometry }> = {};
   for (const key of cfg.devices) {
     if (DEVICES[key].platform !== "android") continue;
@@ -177,6 +186,29 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
       faces.push({ weight: Number(weight), url: `fonts/${file}` });
     }
     fonts.push({ key, family: font.family, fallback: font.fallback, faces });
+  }
+  // The config's own typefaces, under a per-family directory so two fonts
+  // with the same file name cannot collide.
+  for (const font of cfg.fonts ?? []) {
+    const key = customFontKey(font.family);
+    const dir = join(fontsDir, "custom", key);
+    await mkdir(dir, { recursive: true });
+    const faces: Array<{ weight: number; url: string }> = [];
+    for (const [weight, file] of Object.entries(font.files)) {
+      const name = basename(file);
+      await copyFile(resolve(cfg.root, file), join(dir, name));
+      faces.push({
+        weight: Number(weight),
+        url: `fonts/custom/${key}/${encodeURIComponent(name)}`,
+      });
+    }
+    fonts.push({
+      key,
+      family: font.family,
+      fallback: font.fallback ?? "sans-serif",
+      faces,
+      custom: true,
+    });
   }
 
   // Decoration images, copied so the browser can draw the same layers.
@@ -212,22 +244,31 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
   }
 
   const captures: StoreManifest["design"]["captures"] = {};
+  const localeCaptures: StoreManifest["design"]["localeCaptures"] = {};
+  const toUrls = (raw: CaptureManifest, prefix: string): DeviceCaptures => ({
+    screenshots: raw.screenshots.map((s) => ({
+      sceneId: s.sceneId,
+      url: `${prefix}/${basename(s.file)}`,
+    })),
+    clips: raw.preview
+      ? raw.preview.clips.map((c) => ({
+          segmentId: c.segmentId,
+          url: `${prefix}/${basename(c.file)}`,
+          durationSeconds: c.durationSeconds,
+        }))
+      : null,
+  });
   for (const deviceKey of cfg.devices) {
-    const raw = await readCaptureManifest(cfg, deviceKey);
-    if (!raw) continue;
-    captures[deviceKey] = {
-      screenshots: raw.screenshots.map((s) => ({
-        sceneId: s.sceneId,
-        url: `raw/${deviceKey}/${basename(s.file)}`,
-      })),
-      clips: raw.preview
-        ? raw.preview.clips.map((c) => ({
-            segmentId: c.segmentId,
-            url: `raw/${deviceKey}/${basename(c.file)}`,
-            durationSeconds: c.durationSeconds,
-          }))
-        : null,
-    };
+    const perLocale: Record<string, DeviceCaptures> = {};
+    for (const locale of cfg.locales) {
+      const raw = await readCaptureManifest(rawDir(cfg, deviceKey, locale));
+      if (raw) perLocale[locale] = toUrls(raw, `raw/${deviceKey}/${encodeURIComponent(locale)}`);
+    }
+    if (Object.keys(perLocale).length > 0) localeCaptures[deviceKey] = perLocale;
+    const shared = await readCaptureManifest(rawDir(cfg, deviceKey));
+    const fallback = cfg.locales.map((l) => perLocale[l]).find(Boolean);
+    if (shared) captures[deviceKey] = toUrls(shared, `raw/${deviceKey}`);
+    else if (fallback) captures[deviceKey] = fallback;
   }
 
   const previewScene = cfg.scenes.find(isPreview);
@@ -238,6 +279,7 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
       key,
       label: DEVICES[key].label,
       platform: DEVICES[key].platform,
+      formFactor: DEVICES[key].formFactor,
       simulatorName: DEVICES[key].simulatorName ?? null,
       screenshot: DEVICES[key].screenshot,
       preview: DEVICES[key].preview,
@@ -270,6 +312,7 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
           }
         : null,
       captures,
+      localeCaptures,
     },
   };
 
@@ -278,12 +321,9 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
   return file;
 }
 
-async function readCaptureManifest(
-  cfg: LoadedConfig,
-  deviceKey: DeviceKey,
-): Promise<CaptureManifest | null> {
+async function readCaptureManifest(dir: string): Promise<CaptureManifest | null> {
   try {
-    return JSON.parse(await readFile(join(cfg.outDir, "raw", deviceKey, "manifest.json"), "utf8"));
+    return JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"));
   } catch {
     return null;
   }

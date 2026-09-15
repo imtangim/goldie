@@ -1,4 +1,10 @@
-import { CameraIcon, type LucideIcon, SmartphoneIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  CameraIcon,
+  type LucideIcon,
+  SmartphoneIcon,
+  TabletIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { Sidebar } from "./components/Sidebar";
@@ -6,8 +12,11 @@ import { Strip } from "./components/Strip";
 import { useHistory } from "./lib/useHistory";
 import {
   type BundledFont,
+  DEVICE_TYPES,
   type Design,
   type DeviceEntry,
+  type DeviceType,
+  deviceTypeOf,
   loadDesign,
   loadManifest,
   ManifestError,
@@ -15,23 +24,22 @@ import {
   type SceneCopy,
   type StoreManifest,
   saveDesign,
+  uploadFont,
 } from "./manifest";
 
 /** Sentinel for the config's own layout sequence, which the studio can show but not edit. */
 export const CUSTOM_TEMPLATE = "__custom__";
 
-export type Platform = "ios" | "android";
-
 /**
- * Shown when a store's tab is selected but its device is not in the config.
- * The chip holds the ask to hand a coding agent, which knows the config
- * changes and capture steps from the goldie skill.
+ * Shown when a device tab is selected but none of its devices is in the
+ * config. The chip holds the ask to hand a coding agent, which knows the
+ * config changes and capture steps from the goldie skill.
  */
-const ENABLE_PLATFORM: Record<
-  Platform,
+const ENABLE_DEVICE_TYPE: Record<
+  DeviceType,
   { icon: LucideIcon; title: string; body: string; command: string }
 > = {
-  ios: {
+  iphone: {
     icon: SmartphoneIcon,
     title: "No App Store screenshots yet",
     body: "Ask your coding agent to set them up:",
@@ -42,6 +50,12 @@ const ENABLE_PLATFORM: Record<
     title: "No Google Play screenshots yet",
     body: "Ask your coding agent to set them up:",
     command: "create Google Play screenshots using goldie",
+  },
+  "android-tablet": {
+    icon: TabletIcon,
+    title: "No Google Play tablet screenshots yet",
+    body: "Add pixel-tablet to the config's devices, or ask your coding agent:",
+    command: "create Google Play tablet screenshots using goldie",
   },
 };
 
@@ -90,25 +104,28 @@ export function App() {
 function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesign }) {
   const design = manifest.design;
   const view = loadView(manifest.app.name);
-  // Both store tabs render even when only one platform is configured, so the
-  // platform is view state of its own: an unconfigured tab has no device key
-  // to derive it from.
-  const initialPlatform: Platform =
-    view.platform === "ios" || view.platform === "android"
-      ? view.platform
-      : (manifest.devices.find((d) => d.key === view.device)?.platform ??
-        manifest.devices[0]?.platform ??
-        "ios");
-  const [platform, setPlatform] = useState(initialPlatform);
+  // Every device tab renders even when its devices are not configured, so
+  // the tab is view state of its own: an unconfigured tab has no device key
+  // to derive it from. Views saved before tablets stored a platform instead.
+  const savedType = view.deviceType ?? (view.platform === "ios" ? "iphone" : view.platform);
+  const viewDevice = manifest.devices.find((d) => d.key === view.device);
+  const initialType: DeviceType = DEVICE_TYPES.includes(savedType as DeviceType)
+    ? (savedType as DeviceType)
+    : viewDevice
+      ? deviceTypeOf(viewDevice)
+      : manifest.devices[0]
+        ? deviceTypeOf(manifest.devices[0])
+        : "iphone";
+  const [deviceType, setDeviceType] = useState(initialType);
   const [device, setDevice] = useState(() => {
-    const devices = manifest.devices.filter((d) => d.platform === initialPlatform);
+    const devices = manifest.devices.filter((d) => deviceTypeOf(d) === initialType);
     return devices.some((d) => d.key === view.device)
       ? (view.device as string)
       : (devices[0]?.key ?? manifest.devices[0]?.key ?? "");
   });
-  const selectPlatform = (p: Platform) => {
-    setPlatform(p);
-    const devices = manifest.devices.filter((d) => d.platform === p);
+  const selectDeviceType = (t: DeviceType) => {
+    setDeviceType(t);
+    const devices = manifest.devices.filter((d) => deviceTypeOf(d) === t);
     if (devices.length > 0 && !devices.some((d) => d.key === device)) setDevice(devices[0]!.key);
   };
   const [locale, setLocale] = useState(
@@ -128,6 +145,7 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
         ? saved.frame
         : (design.frameVariant ?? ""),
     fontFamily: saved.fontFamily ?? design.theme.fontFamily,
+    localeFonts: { ...design.theme.localeFonts, ...saved.localeFonts },
     copy: saved.copy ?? {},
     layout: knownLayout(saved.layout) ?? design.layout,
     template: initialTemplate(design, saved),
@@ -135,8 +153,18 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     sceneLayouts: initialSceneLayouts(design, saved, knownLayout),
     order: initialOrder(design, saved),
   }));
-  const { background, frame, fontFamily, copy, layout, template, screenOnly, sceneLayouts, order } =
-    state;
+  const {
+    background,
+    frame,
+    fontFamily,
+    localeFonts,
+    copy,
+    layout,
+    template,
+    screenOnly,
+    sceneLayouts,
+    order,
+  } = state;
   // Each setter names its field so a burst of edits to one control (a drag
   // on the gradient picker) collapses into a single undo step.
   const field =
@@ -146,6 +174,21 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
   const setBackground = field("background");
   const setFrame = field("frame");
   const setFontFamily = field("fontFamily");
+  // The current locale's font; "" follows the default font.
+  const setLocaleFont = (stack: string) =>
+    set(`localeFont:${locale}`, (prev) => ({
+      ...prev,
+      localeFonts: { ...prev.localeFonts, [locale]: stack },
+    }));
+
+  // Bundled and config fonts, plus any uploaded this session. Uploads are
+  // saved server-side (goldie.design.json), not through the undo stack.
+  const [fonts, setFonts] = useState<BundledFont[]>(design.fonts);
+  const addFont = async (file: File, family: string, weight: number) => {
+    const font = await uploadFont(file, family, weight);
+    setFonts((prev) => [...prev.filter((f) => f.family !== font.family), font]);
+    return font;
+  };
   const setLayout = field("layout");
   // Picking a template replaces the strip's layout sequence, so any per-scene
   // overrides made against the previous one are dropped with it.
@@ -174,8 +217,8 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     }));
 
   useEffect(() => {
-    storeView(manifest.app.name, { platform, device, locale, dark });
-  }, [manifest.app.name, platform, device, locale, dark]);
+    storeView(manifest.app.name, { deviceType, device, locale, dark });
+  }, [manifest.app.name, deviceType, device, locale, dark]);
 
   // Write the design to disk once it has sat still for a moment; a drag on
   // the gradient picker fires many changes a second. Skips the initial mount
@@ -193,6 +236,7 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
         background,
         frame: frame || undefined,
         fontFamily,
+        localeFonts: Object.keys(localeFonts).length > 0 ? localeFonts : undefined,
         copy: Object.keys(copy).length > 0 ? copy : undefined,
         order: order.length > 0 ? order : undefined,
         template: template === CUSTOM_TEMPLATE ? undefined : template,
@@ -205,31 +249,53 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
       );
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [background, frame, fontFamily, copy, order, template, layout, screenOnly, sceneLayouts]);
+  }, [
+    background,
+    frame,
+    fontFamily,
+    localeFonts,
+    copy,
+    order,
+    template,
+    layout,
+    screenOnly,
+    sceneLayouts,
+  ]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
   }, [dark]);
 
-  // The bundled typefaces' @font-face rules, declared once in <head>.
+  // The typefaces' @font-face rules (bundled, config and uploaded), in <head>.
   useEffect(() => {
     const style = document.createElement("style");
-    style.textContent = fontFaces(design.fonts);
+    style.textContent = fontFaces(fonts);
     document.head.append(style);
     return () => style.remove();
-  }, [design.fonts]);
+  }, [fonts]);
 
-  // The exporter appends the bundled CJK typeface as a per-glyph fallback, so
-  // the preview does the same; otherwise the browser would silently substitute
-  // a system font for characters the chosen stack cannot draw. Only the bare
-  // stack is saved to goldie.design.json.
-  const cjk = design.fonts.find((f) => f.key === "noto-sans-sc");
-  const previewFontFamily =
-    cjk && !fontFamily.includes(cjk.family) ? `${fontFamily}, "${cjk.family}"` : fontFamily;
+  // The exporter appends the custom fonts and the bundled CJK typeface as
+  // per-glyph fallbacks, so the preview does the same; otherwise the browser
+  // would silently substitute a system font for characters the chosen stack
+  // cannot draw. Only the bare stacks are saved to goldie.design.json.
+  const localeFont = localeFonts[locale] || "";
+  const copyFont = localeFont || fontFamily;
+  const fallbacks = [
+    ...fonts.filter((f) => f.custom).map((f) => f.family),
+    ...fonts.filter((f) => f.key === "noto-sans-sc").map((f) => f.family),
+  ];
+  const previewFontFamily = fallbacks.reduce(
+    (stack, family) => (stack.includes(`"${family}"`) ? stack : `${stack}, "${family}"`),
+    copyFont,
+  );
 
-  const platformDevices = manifest.devices.filter((d) => d.platform === platform);
-  const spec = platformDevices.find((d) => d.key === device) ?? platformDevices[0];
-  const captures = spec ? design.captures[spec.key] : undefined;
+  const typeDevices = manifest.devices.filter((d) => deviceTypeOf(d) === deviceType);
+  const spec = typeDevices.find((d) => d.key === device) ?? typeDevices[0];
+  // A localized capture shows the app in the chosen locale; otherwise every
+  // locale shares one capture.
+  const captures = spec
+    ? (design.localeCaptures?.[spec.key]?.[locale] ?? design.captures[spec.key])
+    : undefined;
   const frameUrl = frame
     ? `frames/${frame}.png`
     : (design.customFrameUrl ?? `frames/${design.frameVariants[0]}.png`);
@@ -238,23 +304,27 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     <div className="flex h-full bg-stage p-3 text-foreground">
       <Sidebar
         manifest={manifest}
-        platform={platform}
+        deviceType={deviceType}
         device={device}
         locale={locale}
         dark={dark}
-        onPlatform={selectPlatform}
+        onDeviceType={selectDeviceType}
         onDevice={setDevice}
         onLocale={setLocale}
         onDark={setDark}
         background={background}
         frame={frame}
         fontFamily={fontFamily}
+        fonts={fonts}
+        localeFont={localeFont}
         template={template}
         layout={layout}
         screenOnly={screenOnly}
         onBackground={setBackground}
         onFrame={setFrame}
         onFontFamily={setFontFamily}
+        onLocaleFont={setLocaleFont}
+        onUploadFont={addFont}
         onTemplate={setTemplate}
         onLayout={setLayout}
         onScreenOnly={setScreenOnly}
@@ -295,7 +365,7 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
               command="goldie capture && goldie manifest"
             />
           ) : (
-            <EmptyState {...ENABLE_PLATFORM[platform]} />
+            <EmptyState {...ENABLE_DEVICE_TYPE[deviceType]} />
           )}
         </main>
       </div>
@@ -310,6 +380,8 @@ type DesignState = {
   background: string;
   frame: string;
   fontFamily: string;
+  /** Font stacks per locale; "" or absent follows fontFamily. */
+  localeFonts: Record<string, string>;
   copy: Record<string, SceneCopy>;
   layout: string;
   /** A built-in template key, "" for none, or CUSTOM_TEMPLATE for the config's own sequence. */
@@ -359,7 +431,14 @@ function Toast({ message }: { message: string }) {
   );
 }
 
-type SavedView = { platform?: string; device?: string; locale?: string; dark?: boolean };
+type SavedView = {
+  deviceType?: string;
+  /** Written before tablets had a tab of their own; read as the device type. */
+  platform?: string;
+  device?: string;
+  locale?: string;
+  dark?: boolean;
+};
 
 const storageKey = (appName: string) => `goldie-studio:${appName}`;
 
@@ -386,7 +465,17 @@ function fontFaces(fonts: BundledFont[]): string {
   return fonts
     .flatMap((font) =>
       font.faces.map((face) => {
-        const format = face.url.endsWith(".otf") ? "opentype" : "truetype";
+        const ext = face.url.toLowerCase().split(".").pop();
+        const format =
+          ext === "otf"
+            ? "opentype"
+            : ext === "woff2"
+              ? "woff2"
+              : ext === "woff"
+                ? "woff"
+                : ext === "ttc"
+                  ? "collection"
+                  : "truetype";
         return `@font-face{font-family:"${font.family}";font-weight:${face.weight};font-style:normal;src:url("${face.url}") format("${format}")}`;
       }),
     )

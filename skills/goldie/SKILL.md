@@ -79,14 +79,19 @@ devices already answer this, so do not ask again.
 
 ## Step 0.5: Make sure goldie runs
 
-goldie is an npm package that bundles the CLI, the studio and a pinned argent
-driver. Nothing needs cloning; `npx` fetches it on first use:
+goldie is a CLI that bundles the studio and a pinned argent driver. This
+build (0.4+, with custom fonts, Android tablets and localized captures) is
+installed globally from the imtangim/goldie fork, so call the `goldie` binary
+directly; `npx -y goldie@0` would fetch the older npm release instead:
 
 ```bash
-npx -y goldie@0 help
+goldie version   # 0.4.0 or newer
 ```
 
-Every command below is `npx -y goldie@0 <cmd>`, referred to as `goldie`.
+If `goldie` is missing or older, install it from the fork:
+`git clone git@github-personal:imtangim/goldie.git && cd goldie && bun install && bun run build && npm pack && npm i -g ./goldie-*.tgz`.
+
+Every command below is `goldie <cmd>`.
 It needs Node 20+ and `ffmpeg` on the PATH (`brew install ffmpeg` on macOS,
 `winget install ffmpeg` on Windows, `apt install ffmpeg` on Linux). iOS
 devices need a macOS host; on Linux and Windows only the Android device
@@ -183,7 +188,7 @@ Shell state does not persist between your Bash calls, so prefix every goldie
 command with it:
 
 ```bash
-GOLDIE_CONFIG=<app-repo>/goldie/goldie.config.ts npx -y goldie@0 doctor
+GOLDIE_CONFIG=<app-repo>/goldie/goldie.config.ts goldie doctor
 ```
 
 Fix everything doctor flags before capturing. The usual findings and their
@@ -193,9 +198,9 @@ argent video watermark flag, a screenshot scale override, and a Debug build.
 Then capture and render the stills (skip the video for now, it takes minutes):
 
 ```bash
-GOLDIE_CONFIG=... npx -y goldie@0 capture
-GOLDIE_CONFIG=... npx -y goldie@0 frame
-GOLDIE_CONFIG=... npx -y goldie@0 manifest
+GOLDIE_CONFIG=... goldie capture
+GOLDIE_CONFIG=... goldie frame
+GOLDIE_CONFIG=... goldie manifest
 ```
 
 `capture` replays every flow, including the preview segments, so the raw clips
@@ -216,21 +221,21 @@ Start the studio in the background. It needs `GOLDIE_CONFIG` too, so it
 serves the app repo's `out/`:
 
 ```bash
-GOLDIE_CONFIG=... npx -y goldie@0 studio --no-open   # background task; serves http://localhost:4321
+GOLDIE_CONFIG=... goldie studio --no-open   # background task; serves http://localhost:4321
 ```
 
 Tell the user it is up at http://localhost:4321. Then, also in the background,
 render the preview video so it appears on reload once done:
 
 ```bash
-GOLDIE_CONFIG=... npx -y goldie@0 preview && GOLDIE_CONFIG=... npx -y goldie@0 manifest
+GOLDIE_CONFIG=... goldie preview && GOLDIE_CONFIG=... goldie manifest
 ```
 
 If `preview` refuses because the total is outside 15 to 30 seconds, adjust
 segment pacing (`wait:` steps and `holdSeconds`) and re-capture only what
 changed.
 
-Finish with `GOLDIE_CONFIG=... npx -y goldie@0 verify` and report the result: which
+Finish with `GOLDIE_CONFIG=... goldie verify` and report the result: which
 assets exist, where they are, and whether they pass Apple's rules. The
 studio's sidebar shows the same checks; a red row is a rule violation. The
 Design panel lets the user restyle backgrounds, layouts, bezels and fonts
@@ -250,6 +255,30 @@ Pixel 10 Pro bezel instead of the config's `frame` variant (iPhone art);
 (the promo video is a YouTube link), so `preview` renders a 1080x2400
 portrait video for the user to post on YouTube themselves; no duration
 bounds apply to it.
+
+The `pixel-tablet` device key renders Play tablet screenshots (1440 x 2560,
+portrait) from the same scenes and flows. It needs an AVD with the
+`pixel_tablet` hardware profile; goldie pins its rotation to portrait before
+capturing and frames it with the bundled Pixel Tablet bezel
+(`android.tabletFrame` overrides it).
+
+## Localization
+
+Copy records take one entry per locale; `goldie doctor` reports missing
+translations and locales in scripts (Bengali, Arabic, Thai...) with no custom
+font to draw them. By default one capture in `locales[0]` is reused under
+every locale's copy. Set `localizedCapture: true` to capture each locale with
+the device switched to it (simulator language on iOS; per-app locale on
+Android 13+), into `out/raw/<device>/<locale>/`. Flows that select by visible
+text break in other languages: prefer ids or coordinates, or add
+`localeFlows: { "<locale>": "<flow>" }` on the scene or segment. Re-capture
+one locale with `goldie capture --locale <code>`.
+
+For a script the bundled fonts cannot draw, add the typeface to `fonts`
+(`{ family, files: { 400: "path.ttf", 700: "path.ttf" } }`, paths relative to
+the config) and point `theme.localeFonts["<locale>"]` at it. Never download a
+font for the user without asking; ask them for the files or the family they
+want.
 
 ## Iterating on an existing setup
 
@@ -272,6 +301,9 @@ the next prompt can build on it.
 | Show a different state on one screen | the scene's flow YAML | `capture`, `frame`, `manifest` |
 | Change the preview story or its pacing | preview `segments[]`, `holdSeconds`, flow `wait:` steps | `capture`, `preview`, `manifest` |
 | Another locale | `locales`, plus a `<locale>` key in every copy record | `capture`, `frame`, `preview`, `manifest` |
+| The app's own UI translated in each locale | `localizedCapture: true`, `localeFlows` for text-selector flows | `capture`, `frame`, `manifest` |
+| A custom font, or one per language | `fonts` plus `theme.fontFamily` / `theme.localeFonts` | `frame`, `manifest` |
+| Android tablet screenshots | add `pixel-tablet` to `devices` | `capture --device pixel-tablet`, `frame`, `manifest` |
 
 `capture` replays every flow; to re-capture only what changed, keep the
 other scenes as they are and accept the extra minute, or delete only the

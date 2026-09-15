@@ -28,8 +28,13 @@ const config: GoldieConfig = {
   //   applicationId: "com.example.app",
   // },
 
-  devices: ["iphone-6.9", "pixel-10-pro"], // keys from src/specs.ts
+  devices: ["iphone-6.9", "pixel-10-pro"], // keys from src/specs.ts; add "pixel-tablet" for Play tablet screenshots
   locales: ["en-US"],
+  // Capture the app once per locale, in that language, instead of reusing the
+  // first locale's captures under every locale's headlines.
+  // localizedCapture: true,
+  // Your own typefaces, relative to this file; headlines use 700, subheads 400.
+  // fonts: [{ family: "Inter", files: { 400: "fonts/Inter-Regular.ttf", 700: "fonts/Inter-Bold.ttf" } }],
   appearance: "light",
 
   // Bundled bezel art for the screenshots: "17-pro-silver" | "17-pro-blue" | "17-pro-orange".
@@ -44,6 +49,8 @@ const config: GoldieConfig = {
     // System stack, or a bundled typeface first: "Merriweather", "DM Mono",
     // "Lato", "DM Sans", "Montserrat" (see src/fonts.ts).
     fontFamily: '-apple-system, "SF Pro Display", system-ui, sans-serif',
+    // A font per locale, for scripts the main font cannot draw:
+    // localeFonts: { "bn-BD": '"Noto Sans Bengali", sans-serif' },
     copyHeightRatio: 0.24,
     deviceWidthRatio: 0.84,
     // The strip's rhythm: a built-in template ("editorial", "showcase",

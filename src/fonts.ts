@@ -65,14 +65,35 @@ export function fontFilePath(file: string): string {
   return resolve(FONTS_DIR, file);
 }
 
-/** The `theme.fontFamily` value for a bundled font, or the system stack for "system". */
-export function fontStack(key: string): string {
+/** A config-supplied typeface, as far as font stacks care: see CustomFont in config.ts. */
+type CustomFontRef = { family: string; fallback?: string };
+
+/** CLI key of a custom font: its family, lowercased and dashed ("Noto Sans Bengali" -> "noto-sans-bengali"). */
+export function customFontKey(family: string): string {
+  return family
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/** The CSS stack for a custom font. */
+export function customFontStack(font: CustomFontRef): string {
+  return `"${font.family}", ${font.fallback ?? "sans-serif"}`;
+}
+
+/**
+ * The `theme.fontFamily` value for a bundled font key, a custom font (by
+ * key or family name), or the system stack for "system".
+ */
+export function fontStack(key: string, custom: CustomFontRef[] = []): string {
   if (key === "system") return SYSTEM_FONT;
   const font = (FONTS as Record<string, BundledFont>)[key];
-  if (!font) {
-    throw new Error(`Unknown font "${key}". Available: system, ${FONT_KEYS.join(", ")}`);
-  }
-  return `"${font.family}", ${font.fallback}`;
+  if (font) return `"${font.family}", ${font.fallback}`;
+  const own = custom.find((f) => customFontKey(f.family) === customFontKey(key));
+  if (own) return customFontStack(own);
+  const names = [...FONT_KEYS, ...custom.map((f) => customFontKey(f.family))];
+  throw new Error(`Unknown font "${key}". Available: system, ${names.join(", ")}`);
 }
 
 /**
@@ -82,20 +103,45 @@ export function fontStack(key: string): string {
  * resort fixes that: skia falls through per glyph, so latin text keeps its
  * chosen face and only characters the stack cannot draw reach the fallback.
  */
-export function withGlyphFallback(stack: string): string {
-  const cjk = FONTS["noto-sans-sc"].family;
-  return stack.includes(cjk) ? stack : `${stack}, "${cjk}"`;
+export function withGlyphFallback(stack: string, custom: CustomFontRef[] = []): string {
+  // Custom fonts join the fallbacks ahead of the CJK face: a config that
+  // ships a Bengali or Arabic typeface expects it to catch that script even
+  // under a latin stack.
+  const families = [...custom.map((f) => f.family), FONTS["noto-sans-sc"].family];
+  let out = stack;
+  for (const family of families) {
+    const named = out.split(",").some((part) => part.trim().replace(/^["']|["']$/g, "") === family);
+    if (!named) out = `${out}, "${family}"`;
+  }
+  return out;
 }
 
 let registered = false;
+const registeredCustom = new Set<string>();
 
-/** Makes every bundled font available to the canvas. Safe to call repeatedly. */
-export function registerFonts() {
-  if (registered) return;
-  registered = true;
-  for (const font of Object.values(FONTS)) {
-    for (const file of Object.values(font.files)) {
-      GlobalFonts.registerFromPath(fontFilePath(file), font.family);
+/**
+ * Makes every bundled font, plus the given custom font files (absolute
+ * paths per family), available to the canvas. Safe to call repeatedly.
+ */
+export function registerFonts(custom: Array<{ family: string; files: string[] }> = []) {
+  if (!registered) {
+    registered = true;
+    for (const font of Object.values(FONTS)) {
+      for (const file of Object.values(font.files)) {
+        GlobalFonts.registerFromPath(fontFilePath(file), font.family);
+      }
+    }
+  }
+  for (const font of custom) {
+    for (const file of font.files) {
+      const id = `${font.family}|${file}`;
+      if (registeredCustom.has(id)) continue;
+      registeredCustom.add(id);
+      if (!GlobalFonts.registerFromPath(file, font.family)) {
+        throw new Error(
+          `Font "${font.family}": the canvas could not load ${file} (use TTF or OTF).`,
+        );
+      }
     }
   }
 }

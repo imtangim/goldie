@@ -14,15 +14,16 @@ import {
   SCREEN_SHADOW,
   TYPE,
 } from "../../../src/layouts";
-import type {
-  Decoration,
-  Design,
-  DesignScene,
-  DeviceCaptures,
-  DeviceEntry,
-  FrameGeometry,
-  SceneCopy,
-  Theme,
+import {
+  type Decoration,
+  type Design,
+  type DesignScene,
+  type DeviceCaptures,
+  type DeviceEntry,
+  type FrameGeometry,
+  isRtl,
+  type SceneCopy,
+  type Theme,
 } from "../manifest";
 import { CHECKERBOARD, layoutOptions, TRANSPARENT } from "./DesignPanel";
 import { Select } from "./Sidebar";
@@ -703,6 +704,8 @@ function ScreenshotScene({
 }) {
   const c = compose(spec, tile, theme, { screenOnly, geom });
   const { w, h } = cq(tile);
+  // Set on the text itself, not the flex column, whose alignment would flip.
+  const dir = isRtl(locale) ? "rtl" : undefined;
   // Wider-than-reference tiles compose at a narrower design width; type follows it.
   const typeScale = c.designWidth / tile.width;
   const editable = onEdit ? editableProps : () => ({});
@@ -742,6 +745,7 @@ function ScreenshotScene({
             }}
           >
             <h1
+              dir={dir}
               style={{
                 margin: 0,
                 color: headlineColor,
@@ -756,6 +760,7 @@ function ScreenshotScene({
             </h1>
             {subhead || onEdit ? (
               <p
+                dir={dir}
                 style={{
                   margin: 0,
                   color: subheadColor,
@@ -904,7 +909,7 @@ function Decorations({
               whiteSpace: "nowrap",
             }}
           >
-            {d.text[locale] ?? ""}
+            <span dir={isRtl(locale) ? "rtl" : undefined}>{d.text[locale] ?? ""}</span>
           </div>
         ) : (
           <img

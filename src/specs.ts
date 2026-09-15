@@ -9,7 +9,9 @@
  *   themselves, with no store constraints enforced.
  */
 
-export type DeviceKey = "iphone-6.9" | "pixel-10-pro";
+export type DeviceKey = "iphone-6.9" | "pixel-10-pro" | "pixel-tablet";
+
+export const DEVICE_KEYS = ["iphone-6.9", "pixel-10-pro", "pixel-tablet"] as const;
 
 export type DeviceSpec = {
   /**
@@ -18,6 +20,15 @@ export type DeviceSpec = {
    */
   label: string;
   platform: "ios" | "android";
+  /** Phone or tablet; the studio groups devices into its tabs by platform and form factor. */
+  formFactor: "phone" | "tablet";
+  /**
+   * Android only: the display rotation to pin before capturing (the
+   * `user_rotation` setting: 0 natural, 1 = 90°, 2 = 180°, 3 = 270°). The
+   * Pixel Tablet's natural orientation is landscape, so its portrait tiles
+   * pin rotation 1. Unset leaves the emulator's rotation alone.
+   */
+  userRotation?: 0 | 1 | 2 | 3;
   /**
    * `xcrun simctl` device type name; the toolkit picks the newest runtime that
    * has it. iOS only - android resolves a running emulator's adb serial instead.
@@ -51,6 +62,7 @@ export const DEVICES: Record<DeviceKey, DeviceSpec> = {
   "iphone-6.9": {
     label: "6.9",
     platform: "ios",
+    formFactor: "phone",
     simulatorName: "iPhone 17 Pro Max",
     native: { width: 1320, height: 2868 },
     screenshot: { width: 1320, height: 2868 },
@@ -62,12 +74,27 @@ export const DEVICES: Record<DeviceKey, DeviceSpec> = {
   "pixel-10-pro": {
     label: "Play phone",
     platform: "android",
+    formFactor: "phone",
     avdDeviceNames: ["pixel_10_pro", "pixel_9_pro"],
     native: null,
     screenshot: { width: 1080, height: 1920 },
     // Near the 1280x2856 Pixel screen's aspect, so the cover-crop trims only a
     // sliver; YouTube accepts any portrait size.
     preview: { width: 1080, height: 2400 },
+  },
+  // Play's tablet screenshots (7- and 10-inch slots): 9:16 or 16:9, each side
+  // 1080-7680px. Captured in portrait on the Pixel Tablet emulator (2560x1600
+  // landscape natively, pinned to rotation 1) and framed with its portrait
+  // bezel art (src/frame.ts).
+  "pixel-tablet": {
+    label: "Play tablet",
+    platform: "android",
+    formFactor: "tablet",
+    avdDeviceNames: ["pixel_tablet"],
+    userRotation: 1,
+    native: null,
+    screenshot: { width: 1440, height: 2560 },
+    preview: { width: 1600, height: 2560 },
   },
 };
 

@@ -63,7 +63,8 @@ goldie studio     Preview and tweak the assets in the browser
 
 The output goes to `out/screenshots/<device>/<locale>/` and
 `out/previews/<device>/<locale>/`. The iPhone gets 1320 x 2868 screenshots
-and an 886 x 1920 H.264 preview. Google Play gets 1080 x 1920 screenshots.
+and an 886 x 1920 H.264 preview. Google Play gets 1080 x 1920 phone and
+1440 x 2560 tablet screenshots.
 A preview must run 15 to 30 seconds.
 
 ## Google Play
@@ -93,6 +94,38 @@ link, so `preview` and `all` record the preview scene on the emulator and
 render a portrait video for you to post on YouTube yourself. Apple's 15-30
 second window does not apply to it.
 
+### Android tablets
+
+The `pixel-tablet` device key renders Google Play tablet screenshots
+(1440 x 2560, portrait) from the same scenes, framed with the bundled Pixel
+Tablet bezel. Create an AVD from the Pixel Tablet device definition; goldie
+pins it to portrait before capturing. `android.tabletFrame` swaps in your own
+art.
+
+```ts
+devices: ["iphone-6.9", "pixel-10-pro", "pixel-tablet"],
+```
+
+## Localization
+
+Every copy record (`headline`, `subhead`, badge `text`, `store.subtitle`,
+`store.description`) takes one entry per locale in `locales`; `goldie doctor`
+lists missing ones. By default the app is captured once, in the first
+locale, and every locale reuses those captures under its own headlines. To
+show the app's own translated UI, capture each locale:
+
+```ts
+locales: ["en-US", "bn-BD"],
+localizedCapture: true,
+```
+
+goldie then switches the simulator's language (iOS) or the app's per-app
+locale (Android 13+) before each locale's capture, and writes to
+`out/raw/<device>/<locale>/`. A flow that taps by visible text will not find
+it in another language; give that scene a `localeFlows: { "bn-BD": "home-bn" }`
+entry. `goldie capture --locale bn-BD` re-captures one locale. Right-to-left
+copy (Arabic, Hebrew, Persian, Urdu) is laid out right to left.
+
 ## Design
 
 https://github.com/user-attachments/assets/d6171a90-8fc1-437b-a574-5a8547068a3c
@@ -109,6 +142,19 @@ renders the same result. The config also takes:
   `panorama-duo`, `minimal`.
 - `theme.fontFamily`: a CSS font stack. Merriweather, DM Mono, Lato, DM Sans,
   Montserrat and Noto Sans SC (Simplified Chinese) are bundled.
+- `fonts`: your own typefaces, TTF or OTF files next to the config, one per
+  weight (headlines use 700, subheads 400). The studio's "Upload a font" does
+  the same and stores the files in `goldie-fonts/`.
+
+  ```ts
+  fonts: [{ family: "Inter", files: { 400: "fonts/Inter-Regular.ttf", 700: "fonts/Inter-Bold.ttf" } }],
+  theme: { fontFamily: '"Inter", sans-serif', /* ... */ },
+  ```
+
+- `theme.localeFonts`: a font stack per locale, for scripts the main font
+  cannot draw. The exporter never falls back to system fonts, so Bengali,
+  Arabic, Thai or Devanagari copy needs a custom font that has the glyphs:
+  `localeFonts: { "bn-BD": '"Noto Sans Bengali", sans-serif' }`.
 - `decorations`: badges or images layered behind the device.
 
 ## Remarks

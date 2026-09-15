@@ -10,10 +10,13 @@ import {
 } from "@napi-rs/canvas";
 import type { CaptureManifest } from "./capture.ts";
 import {
+  canvasFontFiles,
   type Decoration,
   deviceFrame,
+  fontFamilyFor,
   isPreview,
   type LoadedConfig,
+  rawDir,
   resolvedScenes,
   type Theme,
 } from "./config.ts";
@@ -23,13 +26,25 @@ import { pngInfo } from "./image.ts";
 import { BADGE, type Composition, compose, SCREEN_SHADOW, TYPE } from "./layouts.ts";
 import { DEVICES, type DeviceKey, PREVIEW, SCREENSHOT_PIXEL_FORMAT } from "./specs.ts";
 
-async function readManifest(cfg: LoadedConfig, deviceKey: DeviceKey): Promise<CaptureManifest> {
-  const file = join(cfg.outDir, "raw", deviceKey, "manifest.json");
-  try {
-    return JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    throw new Error(`No capture manifest at ${file}. Run: goldie capture`);
+/**
+ * The capture manifest a locale renders from: its own localized capture
+ * (raw/<device>/<locale>/) when there is one, else the shared capture
+ * (raw/<device>/) that every locale reuses.
+ */
+export async function readManifest(
+  cfg: LoadedConfig,
+  deviceKey: DeviceKey,
+  locale: string,
+): Promise<CaptureManifest> {
+  const localized = join(rawDir(cfg, deviceKey, locale), "manifest.json");
+  const shared = join(rawDir(cfg, deviceKey), "manifest.json");
+  for (const file of [localized, shared]) {
+    try {
+      return JSON.parse(await readFile(file, "utf8"));
+    } catch {}
   }
+  const hint = cfg.localizedCapture ? `goldie capture --locale ${locale}` : "goldie capture";
+  throw new Error(`No capture manifest at ${localized} or ${shared}. Run: ${hint}`);
 }
 
 /**
@@ -42,7 +57,7 @@ async function readManifest(cfg: LoadedConfig, deviceKey: DeviceKey): Promise<Ca
  */
 export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey, locale: string) {
   const spec = DEVICES[deviceKey];
-  const manifest = await readManifest(cfg, deviceKey);
+  const manifest = await readManifest(cfg, deviceKey, locale);
   // Releases before 0.3 keyed this dir by spec.label; a stale label dir
   // would otherwise ride along into the export zip.
   if (spec.label !== deviceKey)
@@ -59,7 +74,7 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
   const { image, geom } = deviceFrame(cfg, deviceKey);
   const screenOnly = Boolean(cfg.theme.screenOnly || spec.screenOnly);
   const bezel = screenOnly ? null : await loadImage(image);
-  registerFonts();
+  registerFonts(canvasFontFiles(cfg));
 
   const tile = spec.screenshot;
   const findShot = (sceneId: string) => {
@@ -92,7 +107,7 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
       }
 
       if (c.copy) {
-        drawCopy(ctx, c.copy, { width: c.designWidth, height: c.height }, cfg.theme, {
+        drawCopy(ctx, c.copy, { width: c.designWidth, height: c.height }, cfg, locale, {
           headline: pick(scene.headline, locale, scene.id, "headline"),
           subhead: scene.subhead ? pick(scene.subhead, locale, scene.id, "subhead") : undefined,
         });
@@ -166,10 +181,13 @@ function drawCopy(
   ctx: SKRSContext2D,
   copy: NonNullable<Composition["copy"]>,
   tile: { width: number; height: number },
-  theme: Theme,
+  cfg: LoadedConfig,
+  locale: string,
   text: { headline: string; subhead?: string },
 ) {
-  const family = withGlyphFallback(theme.fontFamily);
+  const theme: Theme = cfg.theme;
+  const family = withGlyphFallback(fontFamilyFor(theme, locale), cfg.fonts);
+  ctx.direction = isRtl(locale) ? "rtl" : "ltr";
   const blocks = [
     {
       text: text.headline,
@@ -196,10 +214,19 @@ function drawCopy(
     blocks.reduce((sum, b) => sum + b.lines.length * fontSize(b.font) * b.lineHeight, 0) +
     gap * (blocks.length - 1);
   let y = copy.position === "top" ? copy.y : copy.y - total;
+  // Direction only orders the glyphs of right-to-left scripts; the layout's
+  // anchor and alignment stay put, matching the studio's DOM preview.
   for (const b of blocks) {
     y = drawLines(ctx, { ...b, x: copy.x, y, align: copy.align });
     y += gap;
   }
+  ctx.direction = "ltr";
+}
+
+/** Scripts written right to left: Arabic, Hebrew, Persian, Urdu, and a few more. */
+export function isRtl(locale: string): boolean {
+  const language = locale.toLowerCase().split(/[-_]/)[0]!;
+  return ["ar", "he", "iw", "fa", "ur", "ps", "sd", "ug", "yi", "dv", "ckb"].includes(language);
 }
 
 /**
@@ -266,7 +293,7 @@ async function drawDecorations(
   for (const d of decorations) {
     if (d.kind === "badge") {
       const text = pick(d.text, locale, sceneId, "badge");
-      const font = `${BADGE.weight} ${tile.width * BADGE.fontSize}px ${withGlyphFallback(cfg.theme.fontFamily)}`;
+      const font = `${BADGE.weight} ${tile.width * BADGE.fontSize}px ${withGlyphFallback(fontFamilyFor(cfg.theme, locale), cfg.fonts)}`;
       ctx.font = font;
       ctx.letterSpacing = "0px";
       const size = fontSize(font);
@@ -282,7 +309,9 @@ async function drawDecorations(
       ctx.fillStyle = d.color ?? cfg.theme.headlineColor;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      ctx.direction = isRtl(locale) ? "rtl" : "ltr";
       ctx.fillText(text, left + w / 2, top + h / 2);
+      ctx.direction = "ltr";
     } else {
       const image = await loadImage(resolve(cfg.root, d.src));
       const w = tile.width * d.width;
@@ -480,7 +509,7 @@ export async function renderPreview(cfg: LoadedConfig, deviceKey: DeviceKey, loc
     console.log(`  ${deviceKey} has no preview pipeline`);
     return null;
   }
-  const manifest = await readManifest(cfg, deviceKey);
+  const manifest = await readManifest(cfg, deviceKey, locale);
   if (!manifest.preview)
     throw new Error("No preview clips in the capture manifest. Run: goldie capture");
 

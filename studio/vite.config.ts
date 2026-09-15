@@ -2,7 +2,13 @@ import { join, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
-import { designHandler, exportHandler, type StudioApi, studioPaths } from "../src/studio-server.ts";
+import {
+  designHandler,
+  exportHandler,
+  fontsHandler,
+  type StudioApi,
+  studioPaths,
+} from "../src/studio-server.ts";
 
 const SRC_DIR = resolve(import.meta.dirname, "src");
 const GOLDIE_ROOT = resolve(import.meta.dirname, "..");
@@ -38,10 +44,12 @@ function goldieApi(): Plugin {
   const api: StudioApi = { paths: PATHS, cli: ["bun", join(GOLDIE_ROOT, "src", "cli.ts")] };
   const design = designHandler(api);
   const exp = exportHandler(api);
+  const fonts = fontsHandler(api);
   return {
     name: "goldie-api",
     configureServer(server: ViteDevServer) {
       server.middlewares.use("/api/design", design);
+      server.middlewares.use("/api/fonts", fonts);
       server.middlewares.use("/api/export", (req, res) => exp(req.url ?? "")(req, res));
     },
   };

@@ -1,13 +1,13 @@
 {
   "name": "goldie",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "App Store screenshot and preview automation driven by argent",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kacperkapusciak/goldie.git"
+    "url": "git+https://github.com/imtangim/goldie.git"
   },
-  "homepage": "https://github.com/kacperkapusciak/goldie#readme",
+  "homepage": "https://github.com/imtangim/goldie#readme",
   "keywords": [
     "app-store",
     "screenshots",
@@ -35,6 +35,7 @@
     "dist/",
     "assets/17-pro-*.png",
     "assets/pixel-10-pro.webp",
+    "assets/pixel-tablet.webp",
     "assets/favicon.png",
     "assets/ATTRIBUTION.md",
     "assets/fonts/",

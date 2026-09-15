@@ -2,11 +2,14 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import * as argent from "./argent.ts";
 import {
+  captureLocales,
+  flowFor,
   flowPath,
   isPreview,
   isScreenshot,
   type LoadedConfig,
   type PreviewScene,
+  rawDir as rawDirFor,
 } from "./config.ts";
 import * as device from "./device.ts";
 import { imageSize } from "./image.ts";
@@ -28,6 +31,10 @@ async function runFlow(path: string, udid: string) {
 /** What `frame`/`preview` read. Written to out/raw/<device>/manifest.json. */
 export type CaptureManifest = {
   device: DeviceKey;
+  /** The locale the device ran in; every locale reuses it unless the capture is localized. */
+  locale?: string;
+  /** True when this capture belongs to one locale (raw/<device>/<locale>/). */
+  localized?: boolean;
   udid: string;
   capturedAt: string;
   screenshots: Array<{ sceneId: string; file: string }>;
@@ -37,24 +44,48 @@ export type CaptureManifest = {
   } | null;
 };
 
-export async function capture(cfg: LoadedConfig, deviceKey: DeviceKey): Promise<CaptureManifest> {
+/**
+ * Captures a device: once in the first locale, or with `localizedCapture`
+ * once per locale (the requested ones), each into its own raw/<device>/<locale>/.
+ */
+export async function capture(
+  cfg: LoadedConfig,
+  deviceKey: DeviceKey,
+  locales: string[] = cfg.locales,
+): Promise<CaptureManifest[]> {
+  const out: CaptureManifest[] = [];
+  for (const locale of captureLocales(cfg, locales)) {
+    out.push(await captureLocale(cfg, deviceKey, locale, Boolean(cfg.localizedCapture)));
+  }
+  return out;
+}
+
+async function captureLocale(
+  cfg: LoadedConfig,
+  deviceKey: DeviceKey,
+  locale: string,
+  localized: boolean,
+): Promise<CaptureManifest> {
   const spec = DEVICES[deviceKey];
   const udid = await device.resolveUdid(deviceKey);
-  const rawDir = join(cfg.outDir, "raw", deviceKey);
+  const rawDir = localized ? rawDirFor(cfg, deviceKey, locale) : rawDirFor(cfg, deviceKey);
   await mkdir(rawDir, { recursive: true });
 
   const app = appFor(cfg, deviceKey);
-  console.log(`> ${spec.simulatorName ?? spec.label} (${udid})`);
-  await device.prepare(deviceKey, udid, cfg.locales[0]!, cfg.appearance);
+  console.log(`> ${spec.simulatorName ?? spec.label} (${udid})${localized ? ` [${locale}]` : ""}`);
+  await device.prepare(deviceKey, udid, locale, cfg.appearance);
   // A reinstall wipes app data, which is what makes a re-capture deterministic:
   // flows that create records start from the same empty state every run.
   await device.installApp(udid, app.path, app.id);
+  if (localized) await device.setAppLocale(deviceKey, udid, app.id, locale);
   // First launch after a reinstall pays for a cold JS bundle, which can outlast
   // the launch step's devtools handshake budget. Burn that cost here instead.
   await device.warmUp(udid, app.id);
 
   const manifest: CaptureManifest = {
     device: deviceKey,
+    locale,
+    localized,
     udid,
     capturedAt: new Date().toISOString(),
     screenshots: [],
@@ -63,8 +94,9 @@ export async function capture(cfg: LoadedConfig, deviceKey: DeviceKey): Promise<
 
   for (const scene of cfg.scenes.filter(isScreenshot)) {
     console.log(`  screenshot ${scene.id}`);
-    const report = await runFlow(flowPath(cfg, scene.flow), udid);
-    if (!report.ok) throw new FlowFailure(scene.id, flowPath(cfg, scene.flow), udid, report);
+    const flow = flowPath(cfg, flowFor(scene, locale));
+    const report = await runFlow(flow, udid);
+    if (!report.ok) throw new FlowFailure(scene.id, flow, udid, report);
 
     // The flow runner pins and then restores the status bar around a run, so it
     // is re-pinned per capture rather than once at setup. The settle matters:
@@ -95,7 +127,15 @@ export async function capture(cfg: LoadedConfig, deviceKey: DeviceKey): Promise<
   const previewScene = cfg.scenes.find(isPreview);
   if (previewScene) {
     if (spec.preview) {
-      manifest.preview = await captureSegments(cfg, previewScene, deviceKey, udid, rawDir, app.id);
+      manifest.preview = await captureSegments(
+        cfg,
+        previewScene,
+        deviceKey,
+        udid,
+        rawDir,
+        app.id,
+        locale,
+      );
     } else {
       console.log(`  ${deviceKey} has no preview pipeline; skipping segments`);
     }
@@ -126,6 +166,7 @@ async function captureSegments(
   udid: string,
   rawDir: string,
   appId: string,
+  locale: string,
 ): Promise<CaptureManifest["preview"]> {
   const clips: NonNullable<CaptureManifest["preview"]>["clips"] = [];
 
@@ -152,14 +193,9 @@ async function captureSegments(
     let failure: FlowFailure | null = null;
     let stopped: { video: string; durationMs: number } | null = null;
     try {
-      const report = await runFlow(flowPath(cfg, segment.flow), udid);
-      if (!report.ok)
-        failure = new FlowFailure(
-          `${scene.id}/${segment.id}`,
-          flowPath(cfg, segment.flow),
-          udid,
-          report,
-        );
+      const flow = flowPath(cfg, flowFor(segment, locale));
+      const report = await runFlow(flow, udid);
+      if (!report.ok) failure = new FlowFailure(`${scene.id}/${segment.id}`, flow, udid, report);
       if (segment.holdSeconds) await sleep(segment.holdSeconds * 1000);
     } finally {
       // Stop even on failure, or the next segment cannot start a recording.

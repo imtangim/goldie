@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ANDROID_FRAME, FRAME } from "./frame.ts";
+import { ANDROID_FRAME, ANDROID_TABLET_FRAME, FRAME } from "./frame.ts";
 import {
   type FrameGeometry,
   isLayoutKey,
@@ -27,6 +27,12 @@ export type ScreenshotScene = {
   id: string;
   /** Flow in the app's `.argent/flows`: a name ("home") or a path under it ("goldie/home.yaml"). Its final step captures the screenshot. */
   flow: string;
+  /**
+   * Per-locale replacements for `flow`, used by localized captures. A flow
+   * that taps by visible text ("Settings") cannot find it once the app runs
+   * in another language; point those locales at their own flow.
+   */
+  localeFlows?: Record<Locale, string>;
   /** Headline per locale. */
   headline: Record<Locale, string>;
   subhead?: Record<Locale, string>;
@@ -84,6 +90,8 @@ export type PreviewScene = {
     id: string;
     /** Flow in the app's `.argent/flows`, same forms as a screenshot scene's. */
     flow: string;
+    /** Per-locale replacements for `flow`, as on a screenshot scene. */
+    localeFlows?: Record<Locale, string>;
     /** Hold the last frame this long after the flow ends, in seconds. */
     holdSeconds?: number;
   }>;
@@ -98,6 +106,14 @@ export type Theme = {
   headlineColor: string;
   subheadColor: string;
   fontFamily: string;
+  /**
+   * CSS font stacks per locale, replacing `fontFamily` for that locale's
+   * copy. For scripts the main typeface cannot draw (Bengali, Arabic, Thai,
+   * Devanagari...): the exporter's canvas never falls back to system fonts,
+   * so those locales need a typeface that has the glyphs, usually one of
+   * the config's custom `fonts`. Example: { "bn-BD": '"Noto Sans Bengali", sans-serif' }.
+   */
+  localeFonts?: Record<Locale, string>;
   /** Fraction of the screenshot height reserved for copy above the device. */
   copyHeightRatio: number;
   /** Fraction of the screenshot width the device bezel occupies. */
@@ -135,6 +151,23 @@ export type StoreListing = {
   description: Record<Locale, string>;
 };
 
+/**
+ * A typeface shipped with the app's config rather than with goldie: font
+ * files (TTF, OTF, WOFF2 for the studio only) relative to the config file,
+ * keyed by weight. The renderer registers them with the canvas and the
+ * studio declares them via @font-face, so they render identically in both.
+ * Headlines use weight 700 and subheads 400; a missing weight falls back to
+ * the nearest cut.
+ */
+export type CustomFont = {
+  /** CSS family name to use in `theme.fontFamily` / `theme.localeFonts`. */
+  family: string;
+  /** Font files relative to the config file, keyed by weight (400, 700...). */
+  files: Record<number, string>;
+  /** Generic fallbacks appended after the family in the font picker. Default "sans-serif". */
+  fallback?: string;
+};
+
 export type GoldieConfig = {
   /** Absolute path to the app repo. Holds `.argent/flows`; also used for messages and for locating the build. */
   appRoot: string;
@@ -161,16 +194,22 @@ export type GoldieConfig = {
      * frame and the `layout` file states the display rect and corner_radius;
      * punch the display rect transparent and point this at the result.
      */
-    frame?: {
-      image: string;
-      width: number;
-      height: number;
-      screen: { x: number; y: number; width: number; height: number };
-      screenRadius: number;
-    };
+    frame?: CustomFrame;
+    /** Bezel art for the pixel-tablet device, replacing the bundled Pixel Tablet art; same shape as `frame`, portrait. */
+    tabletFrame?: CustomFrame;
   };
   devices: DeviceKey[];
   locales: Locale[];
+  /**
+   * Capture the app once per locale, with the simulator or emulator switched
+   * to that language, so every locale's screenshots show the app's own
+   * translated UI. Off by default: a single capture in the first locale is
+   * reused under each locale's headlines. Multiplies capture time by the
+   * number of locales; see `localeFlows` for flows that tap by visible text.
+   */
+  localizedCapture?: boolean;
+  /** Typefaces bundled with the config; see CustomFont. */
+  fonts?: CustomFont[];
   /** Simulator appearance for every capture. */
   appearance: "light" | "dark";
   /**
@@ -183,6 +222,14 @@ export type GoldieConfig = {
   theme: Theme;
   store: StoreListing;
   scenes: Scene[];
+};
+
+export type CustomFrame = {
+  image: string;
+  width: number;
+  height: number;
+  screen: { x: number; y: number; width: number; height: number };
+  screenRadius: number;
 };
 
 export type LoadedConfig = GoldieConfig & {
@@ -246,6 +293,7 @@ export async function loadConfig(path = defaultConfigPath()): Promise<LoadedConf
   };
   applyDesign(loaded, readDesign(path));
   framePath(loaded); // fail at load time on a bad variant or missing bezel PNG
+  validateFonts(loaded);
   validateLayouts(loaded);
   return loaded;
 }
@@ -260,6 +308,10 @@ export type DesignOverrides = {
   frame?: FrameVariant;
   /** A full CSS font stack, as the studio's font picker produces. */
   fontFamily?: string;
+  /** Font stacks per locale; merged over theme.localeFonts. An empty string clears a locale's override. */
+  localeFonts?: Record<string, string>;
+  /** Fonts uploaded in the studio, stored next to the config; appended to the config's `fonts`. */
+  fonts?: CustomFont[];
   /** Copy edited in the studio, per screenshot scene id, then locale. */
   copy?: Record<string, SceneCopy>;
   /** Screenshot scene ids in the order the studio arranged them. */
@@ -320,6 +372,15 @@ export function applyDesign(cfg: LoadedConfig, design: DesignOverrides): void {
     framePath(cfg); // throws on an unknown variant
   }
   if (design.fontFamily) cfg.theme.fontFamily = design.fontFamily;
+  if (design.localeFonts) {
+    const merged = { ...cfg.theme.localeFonts, ...design.localeFonts };
+    for (const [locale, stack] of Object.entries(merged)) if (!stack) delete merged[locale];
+    cfg.theme.localeFonts = merged;
+  }
+  if (design.fonts?.length) {
+    const known = new Set((cfg.fonts ?? []).map((f) => f.family));
+    cfg.fonts = [...(cfg.fonts ?? []), ...design.fonts.filter((f) => !known.has(f.family))];
+  }
   if (design.copy) {
     for (const scene of cfg.scenes) {
       const copy = design.copy[scene.id];
@@ -356,6 +417,57 @@ function checkedTemplate(key: string): TemplateChoice {
     throw new Error(`Unknown template "${key}". Available: ${TEMPLATE_KEYS.join(", ")}`);
   }
   return key;
+}
+
+/** Where a device's raw captures live: shared, or one locale's when captured localized. */
+export function rawDir(cfg: LoadedConfig, deviceKey: DeviceKey, locale?: string): string {
+  return locale
+    ? resolve(cfg.outDir, "raw", deviceKey, locale)
+    : resolve(cfg.outDir, "raw", deviceKey);
+}
+
+/** Absolute TTF/OTF files of the custom fonts, per family, for the canvas (it cannot read WOFF/WOFF2). */
+export function canvasFontFiles(cfg: LoadedConfig): Array<{ family: string; files: string[] }> {
+  return (cfg.fonts ?? []).map((font) => ({
+    family: font.family,
+    files: Object.values(font.files)
+      .filter((file) => /\.(ttf|otf|ttc)$/i.test(file))
+      .map((file) => resolve(cfg.root, file)),
+  }));
+}
+
+/** The font stack a locale's copy renders with. */
+export function fontFamilyFor(theme: Theme, locale: string): string {
+  return theme.localeFonts?.[locale] || theme.fontFamily;
+}
+
+/** Fails at load time on a custom font whose file is missing. */
+export function validateFonts(cfg: LoadedConfig): void {
+  for (const font of cfg.fonts ?? []) {
+    if (!font.family || !font.files || Object.keys(font.files).length === 0) {
+      throw new Error(
+        `A custom font needs a family and at least one file: ${JSON.stringify(font)}`,
+      );
+    }
+    for (const file of Object.values(font.files)) {
+      const path = resolve(cfg.root, file);
+      if (!existsSync(path)) throw new Error(`Font "${font.family}": file not found: ${path}`);
+    }
+  }
+}
+
+/** The locales a capture runs in: every requested one when localizedCapture is on, else just the first. */
+export function captureLocales(cfg: LoadedConfig, requested: Locale[]): Locale[] {
+  if (cfg.localizedCapture) return requested;
+  return [cfg.locales[0]!];
+}
+
+/** The flow a scene or segment replays in a locale: its localeFlows entry, else its flow. */
+export function flowFor(
+  item: { flow: string; localeFlows?: Record<Locale, string> },
+  locale: string,
+): string {
+  return item.localeFlows?.[locale] ?? item.flow;
 }
 
 /** Every screenshot scene with the layout and second capture it renders with, in strip order. */
@@ -462,14 +574,17 @@ export function deviceFrame(
   cfg: LoadedConfig,
   deviceKey: DeviceKey,
 ): { image: string; geom: FrameGeometry } {
-  if (DEVICES[deviceKey].platform !== "android") return { image: framePath(cfg), geom: FRAME };
-  const custom = cfg.android?.frame;
+  const spec = DEVICES[deviceKey];
+  if (spec.platform !== "android") return { image: framePath(cfg), geom: FRAME };
+  const tablet = spec.formFactor === "tablet";
+  const custom = tablet ? cfg.android?.tabletFrame : cfg.android?.frame;
   if (custom) {
     const image = resolve(cfg.root, custom.image);
     if (!existsSync(image)) throw new Error(`Frame image not found: ${image}`);
     return { image, geom: custom };
   }
-  return { image: resolve(GOLDIE_ROOT, "assets", ANDROID_FRAME.file), geom: ANDROID_FRAME.geom };
+  const bundled = tablet ? ANDROID_TABLET_FRAME : ANDROID_FRAME;
+  return { image: resolve(GOLDIE_ROOT, "assets", bundled.file), geom: bundled.geom };
 }
 
 /**

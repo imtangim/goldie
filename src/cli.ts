@@ -17,7 +17,7 @@ import { LAYOUT_KEYS, type LayoutKey, TEMPLATE_KEYS } from "./layouts.ts";
 import { writeManifest } from "./manifest.ts";
 import { renderPreview, renderScreenshots, verify } from "./render.ts";
 import { FlowFailure, repairBrief } from "./repair.ts";
-import type { DeviceKey } from "./specs.ts";
+import { DEVICE_KEYS, type DeviceKey } from "./specs.ts";
 import { openInBrowser, serveStudio, studioPaths } from "./studio-server.ts";
 
 const USAGE = `
@@ -39,7 +39,7 @@ Options
   --locale <code>   Only this locale (default: every locale in the config)
   --background <css>  Override theme.background for this run (also clears per-scene backgrounds); "transparent" keeps alpha
   --frame <variant>   Override the screenshot bezel variant for this run (17-pro-silver | 17-pro-blue | 17-pro-orange)
-  --font <key>        Override theme.fontFamily for this run (system | ${FONT_KEYS.join(" | ")})
+  --font <key>        Override theme.fontFamily for this run (system | ${FONT_KEYS.join(" | ")} | a custom font from the config's fonts)
   --template <key>    Override theme.template for this run (${TEMPLATE_KEYS.join(" | ")}; "none" for one layout)
   --layout <key>      Override theme.layout for this run (${LAYOUT_KEYS.join(" | ")})
   --screen-only       Render bare screens with no bezel for this run
@@ -71,7 +71,7 @@ async function main() {
   applyDesign(cfg, {
     background: opt("background"),
     frame: opt("frame") as FrameVariant | undefined,
-    fontFamily: font ? fontStack(font) : undefined, // throws on an unknown key
+    fontFamily: font ? fontStack(font, cfg.fonts) : undefined, // throws on an unknown key
     template: opt("template") === "none" ? "" : opt("template"),
     layout: opt("layout") as LayoutKey | undefined,
     screenOnly: argv.includes("--screen-only") ? true : undefined,
@@ -79,14 +79,24 @@ async function main() {
   validateLayouts(cfg);
 
   const devices = (opt("device") ? [opt("device") as DeviceKey] : cfg.devices) as DeviceKey[];
+  for (const d of devices) {
+    if (!DEVICE_KEYS.includes(d)) {
+      throw new Error(`Unknown device "${d}". Available: ${DEVICE_KEYS.join(", ")}`);
+    }
+  }
   const locales = opt("locale") ? [opt("locale")!] : cfg.locales;
+  for (const l of locales) {
+    if (!cfg.locales.includes(l)) {
+      throw new Error(`Locale "${l}" is not in the config's locales (${cfg.locales.join(", ")}).`);
+    }
+  }
 
   switch (command) {
     case "doctor":
       return (await doctor(cfg)) ? 0 : 1;
 
     case "capture":
-      await runCapture(cfg, devices);
+      await runCapture(cfg, devices, locales);
       return 0;
 
     case "frame":
@@ -120,7 +130,7 @@ async function main() {
 
     case "all": {
       if (!(await doctor(cfg))) return 1;
-      await runCapture(cfg, devices);
+      await runCapture(cfg, devices, locales);
       for (const d of devices) {
         for (const l of locales) {
           await renderScreenshots(cfg, d, l);
@@ -145,11 +155,11 @@ function packageVersion(): string {
   return JSON.parse(readFileSync(pkg, "utf8")).version;
 }
 
-async function runCapture(cfg: LoadedConfig, devices: DeviceKey[]) {
+async function runCapture(cfg: LoadedConfig, devices: DeviceKey[], locales: string[]) {
   for (const d of devices) {
     const udid = await device.resolveUdid(d);
     try {
-      await capture(cfg, d);
+      await capture(cfg, d, locales);
     } finally {
       // Leave the device as it was found; a pinned status bar is sticky.
       await device.clearStatusBar(d, udid);

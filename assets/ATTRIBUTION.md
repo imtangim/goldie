@@ -16,6 +16,12 @@ Source Project and licensed under the
 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), with the
 display rect the skin's `layout` file states punched transparent.
 
+`pixel-tablet.webp` is the Pixel Tablet emulator skin's `back.webp` from the
+Android SDK (`$ANDROID_HOME/skins/pixel_tablet/`), part of the Android Open
+Source Project and licensed under the
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), rotated
+90° clockwise into portrait.
+
 The rest of goldie is MIT licensed.
 
 ## Fonts

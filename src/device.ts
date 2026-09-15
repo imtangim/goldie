@@ -281,7 +281,9 @@ export async function shutdown(key: DeviceKey, udid: string): Promise<void> {
 type Pref = { domain: string; key: string; write: string[]; expect: string };
 
 function keyboardAndLocalePrefs(locale: string): Pref[] {
-  const language = locale.split("-")[0]!;
+  // AppleLanguages takes the whole tag, so "pt-BR" and "zh-Hans" keep their
+  // region or script instead of collapsing to "pt" and "zh".
+  const language = locale;
   const off = (domain: string, key: string): Pref => ({
     domain,
     key,
@@ -297,8 +299,8 @@ function keyboardAndLocalePrefs(locale: string): Pref[] {
     {
       domain: ".GlobalPreferences",
       key: "AppleLocale",
-      write: ["-string", locale.replace("-", "_")],
-      expect: locale.replace("-", "_"),
+      write: ["-string", locale.replaceAll("-", "_")],
+      expect: locale.replaceAll("-", "_"),
     },
     {
       domain: ".GlobalPreferences",
@@ -331,7 +333,8 @@ async function keyboardAndLocalePinned(udid: string, locale: string): Promise<bo
   for (const pref of keyboardAndLocalePrefs(locale)) {
     const r = await exec("defaults", ["read", join(dir, pref.domain), pref.key], { quiet: true });
     if (r.code !== 0) return false;
-    if (r.stdout.replace(/\s+/g, "") !== pref.expect) return false;
+    // `defaults read` quotes array items holding a dash: ("pt-BR").
+    if (r.stdout.replace(/[\s"]+/g, "") !== pref.expect) return false;
   }
   return true;
 }
@@ -391,6 +394,57 @@ export async function clearStatusBar(key: DeviceKey, udid: string): Promise<void
   await exec("xcrun", ["simctl", "status_bar", udid, "clear"], { quiet: true });
 }
 
+/**
+ * Pins the emulator's display rotation (a tablet whose natural orientation is
+ * landscape captures portrait tiles at rotation 1). Auto-rotate is turned off
+ * first, or the sensor would override the pin.
+ */
+export async function pinRotation(key: DeviceKey, udid: string): Promise<void> {
+  const rotation = DEVICES[key].userRotation;
+  if (!isAndroid(key) || rotation === undefined) return;
+  await adbShell(udid, ["settings", "put", "system", "accelerometer_rotation", "0"]);
+  await adbShell(udid, ["settings", "put", "system", "user_rotation", String(rotation)]);
+}
+
+/**
+ * Runs the app in a locale. iOS switches the whole simulator in prepare()
+ * (preferences are read at boot), so this is android only: Android 13+
+ * holds a per-app locale (`cmd locale set-app-locales`), which the framework
+ * applies to the app's resources without a reboot or root, and which
+ * React Native, Flutter and native apps all read. Must run after install,
+ * since a reinstall clears it.
+ */
+export async function setAppLocale(
+  key: DeviceKey,
+  udid: string,
+  appId: string,
+  locale: string,
+): Promise<void> {
+  if (!isAndroid(key)) return;
+  const sdk = Number(
+    (
+      await execOrThrow("adb", ["-s", udid, "shell", "getprop", "ro.build.version.sdk"])
+    ).stdout.trim(),
+  );
+  if (!(sdk >= 33)) {
+    throw new Error(
+      `Localized capture on android needs Android 13 (API 33) or newer for per-app locales; ` +
+        `emulator ${udid} runs API ${sdk || "unknown"}. Create the AVD from a newer system image.`,
+    );
+  }
+  await adbShell(udid, [
+    "cmd",
+    "locale",
+    "set-app-locales",
+    appId,
+    "--user",
+    "0",
+    "--locales",
+    locale,
+  ]);
+  await adbShell(udid, ["am", "force-stop", appId]);
+}
+
 export async function setAppearance(
   key: DeviceKey,
   udid: string,
@@ -434,6 +488,7 @@ export async function prepare(
     if (!(await isBooted(key, udid)))
       throw new Error(`Emulator ${udid} is no longer in "device" state.`);
     await setAppearance(key, udid, appearance);
+    await pinRotation(key, udid);
     await pinStatusBar(key, udid);
     return;
   }

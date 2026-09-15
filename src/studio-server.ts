@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, extname, join, normalize, resolve } from "node:path";
+import { basename, dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "./exec.ts";
+import { customFontKey } from "./fonts.ts";
 import { zipDirs } from "./zip.ts";
 
 /**
@@ -16,6 +17,13 @@ import { zipDirs } from "./zip.ts";
  * The CLI's loadConfig() applies the file, so a saved choice also shapes plain
  * `goldie frame` runs. The UI debounces its PUTs; the server writes the file
  * atomically so a half-written JSON never reaches the CLI.
+ *
+ * POST /api/fonts - uploads a font file for one family and weight (raw body,
+ * `X-Font-Family`, `X-Font-Weight` and `X-Font-Filename` headers). The file
+ * lands in goldie-fonts/<family>/ next to the config, is listed under
+ * `fonts` in goldie.design.json so the CLI registers it, and is copied into
+ * out/web so the studio can declare it at once. Responds with the manifest's
+ * font entry for the family.
  *
  * POST /api/export - renders the final assets from the raw captures with the
  * chosen background and frame (goldie frame + preview + manifest), zips
@@ -66,6 +74,29 @@ export type StudioApi = {
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
+/** Largest font upload accepted; CJK OTFs run around 10-20MB. */
+const MAX_FONT_BYTES = 40 * 1024 * 1024;
+
+const FONT_EXTENSIONS = [".ttf", ".otf", ".ttc", ".woff", ".woff2"];
+
+function readBytes(req: IncomingMessage, limit: number): Promise<Buffer | null> {
+  return new Promise((done, fail) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        done(null);
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => done(Buffer.concat(chunks)));
+    req.on("error", fail);
+  });
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((done) => {
     let body = "";
@@ -106,14 +137,102 @@ export function designHandler({ paths }: StudioApi): Handler {
         return;
       }
       try {
-        const tmp = `${paths.designFile}.tmp`;
-        await writeFile(tmp, `${JSON.stringify(design, null, 2)}\n`);
-        await rename(tmp, paths.designFile);
+        // Uploaded fonts are written by /api/fonts, not by the UI's autosave;
+        // a body without them keeps the ones on disk.
+        if (!("fonts" in design)) {
+          const onDisk = await readDesignFile(paths.designFile);
+          if (onDisk.fonts) design.fonts = onDisk.fonts;
+        }
+        await writeDesignFile(paths.designFile, design);
         res.statusCode = 204;
         res.end();
       } catch (err) {
         res.statusCode = 500;
         res.end(err instanceof Error ? err.message : String(err));
+      }
+    });
+  };
+}
+
+async function readDesignFile(file: string): Promise<Record<string, unknown>> {
+  try {
+    const parsed = JSON.parse(await readFile(file, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Written atomically so a half-written JSON never reaches the CLI. */
+async function writeDesignFile(file: string, design: Record<string, unknown>): Promise<void> {
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(design, null, 2)}\n`);
+  await rename(tmp, file);
+}
+
+type SavedFont = { family: string; files: Record<string, string>; fallback?: string };
+
+/** Handles POST /api/fonts. */
+export function fontsHandler({ paths }: StudioApi): Handler {
+  return (req, res) => {
+    const fail = (status: number, message: string) => {
+      res.statusCode = status;
+      res.end(message);
+    };
+    if (req.method !== "POST") return fail(405, "POST only");
+    const header = (name: string) => {
+      const v = req.headers[name];
+      return decodeURIComponent((Array.isArray(v) ? v[0] : v) ?? "").trim();
+    };
+    const family = header("x-font-family").replace(/["\\]/g, "");
+    const weight = Number(header("x-font-weight") || 400);
+    const filename = basename(header("x-font-filename")).replace(/[^\w.-]+/g, "_");
+    const ext = extname(filename).toLowerCase();
+    if (!family) return fail(400, "X-Font-Family is required.");
+    if (!Number.isInteger(weight) || weight < 100 || weight > 900)
+      return fail(400, "X-Font-Weight must be 100-900.");
+    if (!FONT_EXTENSIONS.includes(ext))
+      return fail(400, `Unsupported font file "${filename}". Use ${FONT_EXTENSIONS.join(", ")}.`);
+
+    readBytes(req, MAX_FONT_BYTES).then(async (bytes) => {
+      if (!bytes) return fail(413, "Font file too large.");
+      if (bytes.length === 0) return fail(400, "Empty font file.");
+      try {
+        const key = customFontKey(family);
+        const rel = `goldie-fonts/${key}/${filename}`;
+        const file = join(paths.configDir, rel);
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file, bytes);
+        const webFile = join(paths.webDir, "fonts", "custom", key, filename);
+        await mkdir(dirname(webFile), { recursive: true });
+        await copyFile(file, webFile);
+
+        const design = await readDesignFile(paths.designFile);
+        const fonts = (Array.isArray(design.fonts) ? design.fonts : []) as SavedFont[];
+        let entry = fonts.find((f) => f.family === family);
+        if (!entry) {
+          entry = { family, files: {}, fallback: "sans-serif" };
+          fonts.push(entry);
+        }
+        entry.files[String(weight)] = rel;
+        design.fonts = fonts;
+        await writeDesignFile(paths.designFile, design);
+
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(
+          JSON.stringify({
+            key,
+            family,
+            fallback: entry.fallback ?? "sans-serif",
+            custom: true,
+            faces: Object.entries(entry.files).map(([w, f]) => ({
+              weight: Number(w),
+              url: `fonts/custom/${key}/${encodeURIComponent(basename(f))}`,
+            })),
+          }),
+        );
+      } catch (err) {
+        fail(500, err instanceof Error ? err.message : String(err));
       }
     });
   };
@@ -227,6 +346,7 @@ const MIME: Record<string, string> = {
   ".mp4": "video/mp4",
   ".mov": "video/quicktime",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".ico": "image/x-icon",
@@ -282,11 +402,13 @@ export function serveStudio(api: StudioApi, port = 4321): Promise<string> {
   }
   const design = designHandler(api);
   const exp = exportHandler(api);
+  const fonts = fontsHandler(api);
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
     if (path === "/api/design") return design(req, res);
+    if (path === "/api/fonts") return fonts(req, res);
     if (path.startsWith("/api/export")) return exp(path.slice("/api/export".length))(req, res);
 
     const file = fileIn(api.paths.webDir, path) ?? fileIn(STUDIO_DIST, path);

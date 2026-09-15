@@ -18,25 +18,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { Platform } from "../App";
-import type { StoreManifest } from "../manifest";
+import { type BundledFont, type DeviceType, deviceTypeOf, type StoreManifest } from "../manifest";
 import { DesignPanel } from "./DesignPanel";
 import { ExportPanel } from "./ExportPanel";
 
 /**
- * The device-type rows, in display order. An entry without a platform renders
- * disabled: iPad stays that way until goldie can capture iPads, which then
- * needs a platform of its own here and in the app's view state.
+ * The device-type tabs, in display order: App Store devices, then Google
+ * Play's. An entry without a type renders disabled: iPad stays that way
+ * until goldie can capture iPads, which then needs a DeviceType of its own.
  */
-const DEVICE_TYPES: Array<{
+const DEVICE_TABS: Array<{
   key: string;
   icon: LucideIcon;
   label: string;
-  platform?: Platform;
+  type?: DeviceType;
 }> = [
-  { key: "iphone", icon: SmartphoneIcon, label: "iPhone", platform: "ios" },
+  { key: "iphone", icon: SmartphoneIcon, label: "iPhone", type: "iphone" },
   { key: "ipad", icon: TabletIcon, label: "iPad" },
-  { key: "android", icon: PlayIcon, label: "Android", platform: "android" },
+  { key: "android", icon: PlayIcon, label: "Android phone", type: "android" },
+  { key: "android-tablet", icon: TabletIcon, label: "Android tablet", type: "android-tablet" },
 ];
 
 /**
@@ -46,50 +46,59 @@ const DEVICE_TYPES: Array<{
  */
 export function Sidebar({
   manifest,
-  platform,
+  deviceType,
   device,
   locale,
   dark,
-  onPlatform,
+  onDeviceType,
   onDevice,
   onLocale,
   onDark,
   background,
   frame,
   fontFamily,
+  fonts,
+  localeFont,
   template,
   layout,
   screenOnly,
   onBackground,
   onFrame,
   onFontFamily,
+  onLocaleFont,
+  onUploadFont,
   onTemplate,
   onLayout,
   onScreenOnly,
 }: {
   manifest: StoreManifest;
-  platform: Platform;
+  deviceType: DeviceType;
   device: string;
   locale: string;
   dark: boolean;
-  onPlatform: (v: Platform) => void;
+  onDeviceType: (v: DeviceType) => void;
   onDevice: (v: string) => void;
   onLocale: (v: string) => void;
   onDark: (v: boolean) => void;
   background: string;
   frame: string;
   fontFamily: string;
+  fonts: BundledFont[];
+  localeFont: string;
   template: string;
   layout: string;
   screenOnly: boolean;
   onBackground: (v: string) => void;
   onFrame: (v: string) => void;
   onFontFamily: (v: string) => void;
+  onLocaleFont: (v: string) => void;
+  onUploadFont: (file: File, family: string, weight: number) => Promise<BundledFont>;
   onTemplate: (v: string) => void;
   onLayout: (v: string) => void;
   onScreenOnly: (v: boolean) => void;
 }) {
-  const platformDevices = manifest.devices.filter((d) => d.platform === platform);
+  const platformDevices = manifest.devices.filter((d) => deviceTypeOf(d) === deviceType);
+  const localizedCapture = Boolean(manifest.design.localeCaptures?.[device]?.[locale]);
   return (
     <aside className="flex w-[300px] shrink-0 flex-col overflow-hidden rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground">
       <header className="flex h-14 shrink-0 items-center justify-between pr-3 pl-5">
@@ -110,15 +119,15 @@ export function Sidebar({
         {/* Both stores always show, so an iOS-only setup still surfaces that
             Google Play screenshots exist (and vice versa). */}
         <RadioGroupPrimitive.Root
-          value={platform === "ios" ? "iphone" : "android"}
+          value={deviceType}
           onValueChange={(key) => {
-            const picked = DEVICE_TYPES.find((t) => t.key === key)?.platform;
-            if (picked) onPlatform(picked);
+            const picked = DEVICE_TABS.find((t) => t.key === key)?.type;
+            if (picked) onDeviceType(picked);
           }}
           aria-label="Device type"
-          className="grid grid-cols-3 gap-2 px-5 pt-4"
+          className="grid grid-cols-2 gap-2 px-5 pt-4"
         >
-          {DEVICE_TYPES.map(({ key, icon: Icon, label, platform: target }) => (
+          {DEVICE_TABS.map(({ key, icon: Icon, label, type: target }) => (
             <RadioGroupPrimitive.Item
               key={key}
               value={key}
@@ -156,7 +165,16 @@ export function Sidebar({
               </Field>
             ) : null}
             {manifest.locales.length > 1 ? (
-              <Field label="Locale">
+              <Field
+                label="Locale"
+                hint={
+                  manifest.design.localeCaptures?.[device]
+                    ? localizedCapture
+                      ? "App UI in this locale"
+                      : "Not captured in this locale"
+                    : undefined
+                }
+              >
                 <Select
                   value={locale}
                   onChange={onLocale}
@@ -169,8 +187,14 @@ export function Sidebar({
         <DesignPanel
           design={manifest.design}
           deviceFrame={
-            platform === "android" || Boolean(platformDevices.find((d) => d.key === device)?.frame)
+            deviceType !== "iphone" || Boolean(platformDevices.find((d) => d.key === device)?.frame)
           }
+          fonts={fonts}
+          locale={locale}
+          locales={manifest.locales}
+          localeFont={localeFont}
+          onLocaleFont={onLocaleFont}
+          onUploadFont={onUploadFont}
           background={background}
           frame={frame}
           fontFamily={fontFamily}
@@ -190,7 +214,7 @@ export function Sidebar({
         <ExportPanel
           background={background}
           frame={frame}
-          font={fontKey(manifest.design, fontFamily)}
+          font={fontKey(manifest.design, fonts, fontFamily)}
           template={template}
           layout={layout}
           screenOnly={screenOnly}
@@ -205,9 +229,13 @@ export function Sidebar({
  * the stack names its family, "system" when it is the config's own stack
  * (the CLI then leaves theme.fontFamily alone), else undefined.
  */
-function fontKey(design: StoreManifest["design"], fontFamily: string): string | undefined {
+function fontKey(
+  design: StoreManifest["design"],
+  fonts: BundledFont[],
+  fontFamily: string,
+): string | undefined {
   if (fontFamily === design.theme.fontFamily) return undefined;
-  return design.fonts.find((f) => fontFamily.startsWith(`"${f.family}"`))?.key ?? "system";
+  return fonts.find((f) => fontFamily.startsWith(`"${f.family}"`))?.key ?? "system";
 }
 
 export function Field({
