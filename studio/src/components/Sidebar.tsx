@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { type BundledFont, type DeviceType, deviceTypeOf, type StoreManifest } from "../manifest";
 import { DesignPanel } from "./DesignPanel";
 import { ExportPanel } from "./ExportPanel";
+import { LanguagePanel } from "./LanguagePanel";
 
 /**
  * The device-type tabs, in display order: App Store devices, then Google
@@ -49,6 +50,15 @@ export function Sidebar({
   deviceType,
   device,
   locale,
+  locales,
+  onLocales,
+  missing,
+  translating,
+  translateError,
+  onTranslate,
+  showBanner,
+  bannerLayout,
+  onBannerLayout,
   dark,
   onDeviceType,
   onDevice,
@@ -75,6 +85,16 @@ export function Sidebar({
   deviceType: DeviceType;
   device: string;
   locale: string;
+  locales: string[];
+  onLocales: (v: string[]) => void;
+  missing: (code: string) => number;
+  translating: string | null;
+  translateError: string | null;
+  onTranslate: (codes: string[]) => void;
+  /** The feature graphic is on and the tab is a Google Play one. */
+  showBanner: boolean;
+  bannerLayout: string;
+  onBannerLayout: (v: string) => void;
   dark: boolean;
   onDeviceType: (v: DeviceType) => void;
   onDevice: (v: string) => void;
@@ -150,40 +170,37 @@ export function Sidebar({
             </RadioGroupPrimitive.Item>
           ))}
         </RadioGroupPrimitive.Root>
-        {platformDevices.length > 1 || manifest.locales.length > 1 ? (
-          <div className="flex flex-col gap-4 p-5">
-            {platformDevices.length > 1 ? (
-              <Field label="Device">
-                <Select
-                  value={device}
-                  onChange={onDevice}
-                  options={platformDevices.map((d) => [
-                    d.key,
-                    d.platform === "ios" ? `${d.label}"` : d.label,
-                  ])}
-                />
-              </Field>
-            ) : null}
-            {manifest.locales.length > 1 ? (
-              <Field
-                label="Locale"
-                hint={
-                  manifest.design.localeCaptures?.[device]
-                    ? localizedCapture
-                      ? "App UI in this locale"
-                      : "Not captured in this locale"
-                    : undefined
-                }
-              >
-                <Select
-                  value={locale}
-                  onChange={onLocale}
-                  options={manifest.locales.map((l) => [l, l])}
-                />
-              </Field>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="flex flex-col gap-4 px-5 pt-5">
+          {platformDevices.length > 1 ? (
+            <Field label="Device">
+              <Select
+                value={device}
+                onChange={onDevice}
+                options={platformDevices.map((d) => [
+                  d.key,
+                  d.platform === "ios" ? `${d.label}"` : d.label,
+                ])}
+              />
+            </Field>
+          ) : null}
+          <LanguagePanel
+            locales={locales}
+            locale={locale}
+            onLocale={onLocale}
+            onLocales={onLocales}
+            missing={missing}
+            translating={translating}
+            translateError={translateError}
+            onTranslate={onTranslate}
+          />
+          {manifest.design.localeCaptures?.[device] ? (
+            <p className="-mt-2 text-[11px] text-muted-foreground">
+              {localizedCapture
+                ? "The app is shown in this language."
+                : "The app was not captured in this language yet."}
+            </p>
+          ) : null}
+        </div>
         <DesignPanel
           design={manifest.design}
           deviceFrame={
@@ -191,8 +208,11 @@ export function Sidebar({
           }
           fonts={fonts}
           locale={locale}
-          locales={manifest.locales}
+          locales={locales}
           localeFont={localeFont}
+          showBanner={showBanner}
+          bannerLayout={bannerLayout}
+          onBannerLayout={onBannerLayout}
           onLocaleFont={onLocaleFont}
           onUploadFont={onUploadFont}
           background={background}

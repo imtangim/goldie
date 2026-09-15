@@ -59,6 +59,10 @@ argent flows in `.argent/flows`. Then run:
 goldie doctor     Check tools, simulators and flows
 goldie all        Capture, frame, render the preview and verify
 goldie studio     Preview and tweak the assets in the browser
+goldie banner     Render the Google Play feature graphic
+goldie locales    List, add or remove languages
+goldie translate  Fill missing translations with Claude
+goldie list       Every device, layout, template, banner layout and language code
 ```
 
 The output goes to `out/screenshots/<device>/<locale>/` and
@@ -108,6 +112,12 @@ devices: ["iphone-6.9", "pixel-10-pro", "pixel-tablet"],
 
 ## Localization
 
+Add languages in the studio (Language > Manage languages) or with
+`goldie locales add bn-BD de-DE`. "Translate missing" in the studio, or
+`goldie translate --locale bn-BD`, fills untranslated headlines with the
+Claude Code CLI (it must be signed in); any text is editable in place. A
+language without a translation renders the first language's copy.
+
 Every copy record (`headline`, `subhead`, badge `text`, `store.subtitle`,
 `store.description`) takes one entry per locale in `locales`; `goldie doctor`
 lists missing ones. By default the app is captured once, in the first
@@ -125,6 +135,22 @@ locale (Android 13+) before each locale's capture, and writes to
 it in another language; give that scene a `localeFlows: { "bn-BD": "home-bn" }`
 entry. `goldie capture --locale bn-BD` re-captures one locale. Right-to-left
 copy (Arabic, Hebrew, Persian, Urdu) is laid out right to left.
+
+## Feature graphic
+
+Google Play requires a 1024 x 500 feature graphic. With an android device in
+`devices`, `goldie frame` renders one per language into
+`out/feature-graphic/<locale>/`, and `goldie banner` renders only that. Pick a
+layout (`split`, `split-right`, `tilt`, `duo`, `trio`, `showcase`,
+`centered`) in the studio or the config, or give your own template:
+
+```ts
+featureGraphic: {
+  layout: "duo", // or { copy: { x, y, width, align }, devices: [{ x, y, height, rotate, capture }] }
+  headline: { "en-US": "Budgets that keep up" },
+  subhead: { "en-US": "Track every taka in seconds" },
+},
+```
 
 ## Design
 

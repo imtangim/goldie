@@ -5,10 +5,12 @@ description: >-
   or Android app. goldie explores the app on a simulator or emulator, writes
   argent flows, renders framed screenshots and a preview video, and opens a
   local studio with the finished store page. Use this skill when the user
-  asks for store screenshots, store assets, a preview video, or mentions
-  goldie. Also use it to change assets goldie made before: new headlines, a
-  different background or bezel, or a new screenshot order. Run it from the
-  mobile app's repo.
+  asks for store screenshots, store assets, a preview video, a Google Play
+  feature graphic or banner, translated or localized store screenshots, or
+  mentions goldie. Also use it to change assets goldie made before: new
+  headlines, another language, a different background, bezel, font, template
+  or banner layout, or a new screenshot order. Run it from the mobile app's
+  repo.
 ---
 
 # goldie: App Store assets for the app in this repo
@@ -80,18 +82,21 @@ devices already answer this, so do not ask again.
 ## Step 0.5: Make sure goldie runs
 
 goldie is a CLI that bundles the studio and a pinned argent driver. This
-build (0.4+, with custom fonts, Android tablets and localized captures) is
+build (0.5+, with custom fonts, Android tablets, languages, translation and feature graphics) is
 installed globally from the imtangim/goldie fork, so call the `goldie` binary
 directly; `npx -y goldie@0` would fetch the older npm release instead:
 
 ```bash
-goldie version   # 0.4.0 or newer
+goldie version   # 0.5.0 or newer
 ```
 
 If `goldie` is missing or older, install it from the fork:
 `git clone git@github-personal:imtangim/goldie.git && cd goldie && bun install && bun run build && npm pack && npm i -g ./goldie-*.tgz`.
 
-Every command below is `goldie <cmd>`.
+Every command below is `goldie <cmd>`. `goldie help` lists them all, and
+`goldie list` (or `goldie list --json`) prints every valid device key, layout,
+template, banner layout, font key and language code; check it rather than
+guessing a key, since a wrong key fails the run.
 It needs Node 20+ and `ffmpeg` on the PATH (`brew install ffmpeg` on macOS,
 `winget install ffmpeg` on Windows, `apt install ffmpeg` on Linux). iOS
 devices need a macOS host; on Linux and Windows only the Android device
@@ -262,12 +267,83 @@ portrait) from the same scenes and flows. It needs an AVD with the
 capturing and frames it with the bundled Pixel Tablet bezel
 (`android.tabletFrame` overrides it).
 
-## Localization
+### The feature graphic (banner)
 
-Copy records take one entry per locale; `goldie doctor` reports missing
-translations and locales in scripts (Bengali, Arabic, Thai...) with no custom
-font to draw them. By default one capture in `locales[0]` is reused under
-every locale's copy. Set `localizedCapture: true` to capture each locale with
+Google Play requires a 1024 x 500 feature graphic. goldie renders one per
+locale into `out/feature-graphic/<locale>/feature-graphic.png` whenever the
+config has an android device (`featureGraphic.enabled: false` turns it off,
+`true` forces it for an iOS-only config). `goldie frame` and `goldie all`
+include it; `goldie banner` renders only the banner. By default the headline
+is the store name, the subhead the store subtitle, and the devices show the
+first screenshot scenes' captures on the first android device. Set a real
+headline: the banner is the first thing a Play visitor sees.
+
+```ts
+featureGraphic: {
+  layout: "duo",                                   // goldie list: split, split-right, tilt, duo, trio, showcase, centered
+  headline: { "en-US": "Budgets that keep up" },
+  subhead: { "en-US": "Track every taka in seconds" },
+  scenes: ["home", "stats"],                       // captures for device 0, 1, 2
+  // background: "#0F172A",                        // else theme.background
+  // device: "pixel-10-pro",                       // whose captures and bezel
+},
+```
+
+A custom banner template replaces the key with a spec, every value a fraction
+of the banner (x and y are centres; device `height` above 1 bleeds off the
+edge; devices are listed back to front, at most three):
+
+```ts
+featureGraphic: {
+  layout: {
+    copy: { x: 0.06, y: 0.5, width: 0.45, align: "left", headlineSize: 0.12 },  // copy: null for no text
+    devices: [
+      { x: 0.72, y: 0.7, height: 1.1, rotate: -6, capture: 1 },
+      { x: 0.86, y: 0.6, height: 1.25, rotate: 4, capture: 0 },
+    ],
+  },
+  headline: { "en-US": "..." },
+},
+```
+
+Check a banner by rendering it and looking at the PNG before reporting back.
+
+## Languages and localization
+
+The config's `locales` lists the store languages; the first is the source
+the others translate from. Every copy record (`headline`, `subhead`, badge
+`text`, `featureGraphic.headline` / `subhead`, `store.subtitle` /
+`description`) takes one entry per locale. A locale without an entry renders
+the source locale's copy and `frame` prints a `!` warning naming what is
+untranslated, so a new language never blocks a render.
+
+When the user asks for a language (or several):
+
+1. `goldie locales add bn-BD de-DE` (codes from `goldie list`). This saves
+   the list to `goldie.design.json`, the same place the studio's Language
+   picker writes; `goldie locales` prints it and `goldie locales remove <code>`
+   drops one. Editing `locales` in the config works too.
+2. Translate the copy. You are the better translator here: you know the app
+   and its voice, so write the translations straight into each copy record in
+   `goldie.config.ts` (short, natural, same length as the source; keep brand
+   names). `goldie translate --locale <code>` is the non-agent route: it
+   fills only missing copy into `goldie.design.json` using the local `claude`
+   CLI, which must be signed in; `--force` retranslates everything.
+3. Check fonts: for Bengali, Arabic, Thai, Devanagari and other non-latin
+   scripts, `goldie doctor` warns when no custom font covers the script (see
+   below). CJK is covered by the bundled Noto Sans SC (not Korean).
+4. `goldie frame && goldie manifest`, then look at one rendered tile per new
+   language before reporting.
+
+In the studio the user does the same without you: Language > Manage
+languages adds or removes a language, "Translate missing" calls Claude, and
+clicking any headline, subhead or banner text edits it for the chosen
+language. Studio edits live in `goldie.design.json` under `copy`, keyed by
+scene id (and `feature-graphic`), then field, then locale; they override the
+config's copy, so read that file too before editing copy the user says they
+changed.
+
+By default one capture in `locales[0]` is reused under every locale's copy. Set `localizedCapture: true` to capture each locale with
 the device switched to it (simulator language on iOS; per-app locale on
 Android 13+), into `out/raw/<device>/<locale>/`. Flows that select by visible
 text break in other languages: prefer ids or coordinates, or add
@@ -292,7 +368,7 @@ the next prompt can build on it.
 | Different headline, subhead or store copy | `scenes[].headline` / `subhead`, `store.*` | `frame`, `manifest` |
 | A new look: background, text colors, font, sizing | `theme.*`, or `scenes[].background` for one tile | `frame`, `manifest` |
 | A different bezel, or no bezel | `frame.variant`, `theme.screenOnly` | `frame`, `manifest` |
-| A varied strip: panorama opener, hero, tilted tiles, a breather | `theme.template`: a built-in key or a sequence of layout keys (see `references/config.md`) | `frame`, `manifest` |
+| A varied strip: panorama opener, hero, tilted tiles, a breather | `theme.template`: a built-in key (`editorial`, `showcase`, `magazine`, `storyboard`, `dynamic`, `bold`, `clean`, `playful`, `gallery`) or a sequence of layout keys (see `references/config.md`) | `frame`, `manifest` |
 | A different layout for every tile, or one | `theme.layout`, or `scenes[].layout` for one tile | `frame`, `manifest` |
 | Two screens in one tile, or a two-tile panorama | `scenes[].layout: "duo"` / `"panorama-duo"` plus `secondScene`, or `"panorama"` | `frame`, `manifest` |
 | A badge, sticker or logo on the tiles | `theme.decorations` (all) or `scenes[].decorations` (one) | `frame`, `manifest` |
@@ -300,7 +376,10 @@ the next prompt can build on it.
 | Reorder, drop or add a screenshot | `scenes[]`; a new scene needs a new flow in `.argent/flows` | `capture` (new flows), `frame`, `manifest` |
 | Show a different state on one screen | the scene's flow YAML | `capture`, `frame`, `manifest` |
 | Change the preview story or its pacing | preview `segments[]`, `holdSeconds`, flow `wait:` steps | `capture`, `preview`, `manifest` |
-| Another locale | `locales`, plus a `<locale>` key in every copy record | `capture`, `frame`, `preview`, `manifest` |
+| Another language | `goldie locales add <code>`, then translations in every copy record | `frame`, `manifest` (add `capture` with `localizedCapture`) |
+| Translate into a language already listed | a `<locale>` entry in every copy record (or `goldie translate --locale <code>`) | `frame`, `manifest` |
+| A Google Play feature graphic / banner | `featureGraphic` (headline, subhead, layout) | `banner`, `manifest` |
+| A different or custom banner layout | `featureGraphic.layout`: a key from `goldie list`, or a `{ copy, devices }` spec | `banner`, `manifest` |
 | The app's own UI translated in each locale | `localizedCapture: true`, `localeFlows` for text-selector flows | `capture`, `frame`, `manifest` |
 | A custom font, or one per language | `fonts` plus `theme.fontFamily` / `theme.localeFonts` | `frame`, `manifest` |
 | Android tablet screenshots | add `pixel-tablet` to `devices` | `capture --device pixel-tablet`, `frame`, `manifest` |
@@ -311,10 +390,11 @@ stale files under `out/raw/` before running it. `frame` and `manifest` take
 seconds, so run them freely. The studio at http://localhost:4321 picks up
 changes on reload; start it again with `GOLDIE_CONFIG` if it is not running.
 
-The studio's Design panel writes to `goldie.design.json` next to the config,
-and the CLI's `--background` / `--frame` / `--font` / `--template` /
-`--layout` / `--screen-only` flags are one-run overrides; neither touches the
-config. If the user tried something there and wants to keep it, copy the
+The studio's Design panel writes to `goldie.design.json` next to the config
+(design choices, copy edits, the language list, uploaded fonts, the banner
+layout), and the CLI's `--background` / `--frame` / `--font` / `--template` /
+`--layout` / `--screen-only` / `--banner` flags are one-run overrides; neither
+touches the config. If the user tried something there and wants to keep it, copy the
 value into `theme.background`, `frame.variant`, `theme.fontFamily`,
 `theme.template`, `theme.layout` or `scenes[].layout` so the next re-prompt
 starts from what they see. The

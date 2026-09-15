@@ -8,6 +8,7 @@ import {
   fontsHandler,
   type StudioApi,
   studioPaths,
+  translateHandler,
 } from "../src/studio-server.ts";
 
 const SRC_DIR = resolve(import.meta.dirname, "src");
@@ -50,6 +51,7 @@ function goldieApi(): Plugin {
     configureServer(server: ViteDevServer) {
       server.middlewares.use("/api/design", design);
       server.middlewares.use("/api/fonts", fonts);
+      server.middlewares.use("/api/translate", translateHandler());
       server.middlewares.use("/api/export", (req, res) => exp(req.url ?? "")(req, res));
     },
   };

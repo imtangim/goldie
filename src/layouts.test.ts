@@ -51,9 +51,9 @@ describe("compose", () => {
     expect(screen.height).toBe(frame.height);
   });
 
-  test("duo and panorama-duo need a second capture, the rest do not", () => {
+  test("the two-screen layouts need a second capture, the rest do not", () => {
     const duo = LAYOUT_KEYS.filter((k) => needsSecondCapture(LAYOUTS[k]));
-    expect(duo.sort()).toEqual(["duo", "duo-tilt", "panorama-duo"]);
+    expect(duo.sort()).toEqual(["duo", "duo-tilt", "panorama-duo", "stack"]);
   });
 
   test("bottom copy anchors at the bottom edge", () => {

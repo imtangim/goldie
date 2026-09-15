@@ -20,6 +20,11 @@ export const LAYOUT_KEYS = [
   "panorama",
   "panorama-duo",
   "minimal",
+  "float",
+  "zoom",
+  "lean",
+  "hang-tilt",
+  "stack",
 ] as const;
 export type LayoutKey = (typeof LAYOUT_KEYS)[number];
 
@@ -197,6 +202,49 @@ export const LAYOUTS: Record<LayoutKey, LayoutSpec> = {
     copy: { position: "none", align: "center" },
     devices: single({ widthRatio: 0.92, x: 0.5, y: 0.5 }),
   },
+  float: {
+    key: "float",
+    label: "Float",
+    description: "Copy on top, a smaller device floating in open space.",
+    span: 1,
+    copy: { position: "top", align: "center", heightRatio: 0.26 },
+    devices: single({ widthRatio: 0.66, x: 0.5, y: 0.62 }),
+  },
+  zoom: {
+    key: "zoom",
+    label: "Zoom",
+    description: "Copy on top, a very large device cropped by the bottom edge.",
+    span: 1,
+    copy: { position: "top", align: "center", heightRatio: 0.22 },
+    devices: single({ widthRatio: 1.24, x: 0.5, y: 0.86 }),
+  },
+  lean: {
+    key: "lean",
+    label: "Lean",
+    description: "Left-aligned copy, device leaning out of the bottom left.",
+    span: 1,
+    copy: { position: "top", align: "left", heightRatio: 0.26 },
+    devices: single({ widthRatio: 0.92, x: 0.4, y: 0.78, rotate: -12 }),
+  },
+  "hang-tilt": {
+    key: "hang-tilt",
+    label: "Hang tilt",
+    description: "A tilted device hanging from the top edge, copy underneath.",
+    span: 1,
+    copy: { position: "bottom", align: "center", heightRatio: 0.24 },
+    devices: single({ widthRatio: 0.84, x: 0.5, y: 0.32, rotate: 7 }),
+  },
+  stack: {
+    key: "stack",
+    label: "Stack",
+    description: "Two screens overlapping on a diagonal, the main one in front.",
+    span: 1,
+    copy: { position: "top", align: "center", heightRatio: 0.24 },
+    devices: [
+      { widthRatio: 0.6, x: 0.36, y: 0.64, rotate: -4, capture: "secondary" },
+      { widthRatio: 0.6, x: 0.64, y: 0.8, rotate: 4, capture: "primary" },
+    ],
+  },
 };
 
 export function isLayoutKey(key: string): key is LayoutKey {
@@ -216,6 +264,10 @@ export const TEMPLATE_KEYS = [
   "magazine",
   "storyboard",
   "dynamic",
+  "bold",
+  "clean",
+  "playful",
+  "gallery",
 ] as const;
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 
@@ -262,6 +314,30 @@ export const TEMPLATES: Record<TemplateKey, TemplateSpec> = {
     label: "Dynamic",
     description: "Everything tilted: a tilt, a tilted pair, a panorama, a breather.",
     sequence: ["tilt", "duo-tilt", "panorama", "minimal", "tilt-right"],
+  },
+  bold: {
+    key: "bold",
+    label: "Bold",
+    description: "Big and cropped: a zoom opener, a lean, a stacked pair, a hero.",
+    sequence: ["zoom", "lean", "stack", "hero", "zoom"],
+  },
+  clean: {
+    key: "clean",
+    label: "Clean",
+    description: "Lots of air: floating devices alternating with copy-below tiles.",
+    sequence: ["float", "copy-below", "float", "classic", "minimal"],
+  },
+  playful: {
+    key: "playful",
+    label: "Playful",
+    description: "Every tile at an angle, hanging, leaning and stacked.",
+    sequence: ["lean", "hang-tilt", "duo-tilt", "tilt-right", "stack"],
+  },
+  gallery: {
+    key: "gallery",
+    label: "Gallery",
+    description: "A two-screen panorama, then stacks, floats and a zoom.",
+    sequence: ["panorama-duo", "stack", "float", "zoom", "copy-below"],
   },
 };
 

@@ -92,3 +92,100 @@ describe("android tablet", () => {
     expect(frame.top + frame.height).toBeLessThanOrEqual(tile.height);
   });
 });
+
+describe("feature graphic", () => {
+  test("every built-in banner composes inside a 1024x500 canvas", async () => {
+    const { BANNER_KEYS, BANNER_LAYOUTS, composeBanner } = await import("./banner.ts");
+    for (const key of BANNER_KEYS) {
+      const c = composeBanner(BANNER_LAYOUTS[key]);
+      expect(c.width).toBe(1024);
+      expect(c.height).toBe(500);
+      for (const d of c.devices) {
+        for (const v of Object.values({ ...d.frame, ...d.screen }))
+          expect(Number.isFinite(v)).toBe(true);
+        // A device may bleed off an edge but its centre stays on the banner.
+        expect(d.frame.left + d.frame.width / 2).toBeGreaterThan(0);
+        expect(d.frame.left + d.frame.width / 2).toBeLessThan(1024);
+      }
+      if (c.copy) expect(c.copy.maxWidth).toBeLessThanOrEqual(1024);
+    }
+  });
+
+  test("custom banner specs are validated", async () => {
+    const { bannerLayoutProblem } = await import("./banner.ts");
+    expect(bannerLayoutProblem({ copy: null, devices: [] })).toBeNull();
+    expect(
+      bannerLayoutProblem({ copy: { x: 0, y: 0.5, width: 0.5, align: "middle" }, devices: [] }),
+    ).toMatch(/align/);
+    expect(bannerLayoutProblem({ copy: null, devices: [{ x: 1 }] })).toMatch(/height/);
+  });
+
+  test("defaults come from the store listing, edits layer over them", async () => {
+    const { resolvedFeatureGraphic } = await import("./config.ts");
+    const c = cfg({
+      devices: ["pixel-10-pro"],
+      store: { name: "Walley", subtitle: { "en-US": "Money, sorted", "bn-BD": "টাকা" } },
+      scenes: [{ kind: "screenshot", id: "home", flow: "home", headline: {} }],
+    } as unknown as Partial<LoadedConfig>);
+    applyDesign(c, { copy: { "feature-graphic": { subhead: { "bn-BD": "হিসাব" } } } });
+    const fg = resolvedFeatureGraphic(c)!;
+    expect(fg.headline["en-US"]).toBe("Walley");
+    expect(fg.subhead).toEqual({ "en-US": "Money, sorted", "bn-BD": "হিসাব" });
+    expect(fg.scenes).toEqual(["home"]);
+    expect(fg.device).toBe("pixel-10-pro");
+  });
+
+  test("off without an android device unless enabled", async () => {
+    const { resolvedFeatureGraphic } = await import("./config.ts");
+    const base = { devices: ["iphone-6.9"], store: { name: "A", subtitle: {} }, scenes: [] };
+    expect(resolvedFeatureGraphic(cfg(base as unknown as Partial<LoadedConfig>))).toBeNull();
+    const on = cfg({
+      ...base,
+      featureGraphic: { enabled: true },
+    } as unknown as Partial<LoadedConfig>);
+    expect(resolvedFeatureGraphic(on)?.device).toBe("iphone-6.9");
+  });
+});
+
+describe("languages", () => {
+  test("copy falls back to the source locale and reports it", async () => {
+    const { copyFor } = await import("./config.ts");
+    const missing: string[] = [];
+    expect(copyFor({ "en-US": "Hi" }, "de-DE", ["en-US", "de-DE"], missing, "home headline")).toBe(
+      "Hi",
+    );
+    expect(missing).toEqual(["home headline"]);
+    expect(copyFor({ "en-US": "Hi", "de-DE": "Hallo" }, "de-DE", ["en-US"])).toBe("Hallo");
+  });
+
+  test("design locales replace the config's list", () => {
+    const c = cfg();
+    applyDesign(c, { locales: ["en-US", "ja", "ja"] });
+    expect(c.locales).toEqual(["en-US", "ja"]);
+  });
+
+  test("translations merge into the design copy by key", async () => {
+    const { mergeTranslations, parseCopyKey } = await import("./translate.ts");
+    expect(parseCopyKey("feature-graphic.subhead")).toEqual({
+      id: "feature-graphic",
+      field: "subhead",
+    });
+    expect(parseCopyKey("home.title")).toBeNull();
+    const d = mergeTranslations({ copy: { home: { headline: { "en-US": "Hi" } } } }, "de-DE", {
+      "home.headline": "Hallo",
+      "stats.subhead": "Mehr",
+    });
+    expect(d.copy).toEqual({
+      home: { headline: { "en-US": "Hi", "de-DE": "Hallo" } },
+      stats: { subhead: { "de-DE": "Mehr" } },
+    });
+  });
+
+  test("language codes", async () => {
+    const { isLocaleCode, localeName } = await import("./locales.ts");
+    for (const ok of ["bn", "bn-BD", "zh-Hans", "zh-Hant-TW", "es-419"])
+      expect(isLocaleCode(ok)).toBe(true);
+    for (const bad of ["english", "BN-bd", "bn_BD", ""]) expect(isLocaleCode(bad)).toBe(false);
+    expect(localeName("bn-BD")).toBe("Bengali (Bangladesh)");
+  });
+});

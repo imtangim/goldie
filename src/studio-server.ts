@@ -6,6 +6,7 @@ import { basename, dirname, extname, join, normalize, resolve } from "node:path"
 import { fileURLToPath } from "node:url";
 import { exec } from "./exec.ts";
 import { customFontKey } from "./fonts.ts";
+import { translateTexts } from "./translate.ts";
 import { zipDirs } from "./zip.ts";
 
 /**
@@ -24,6 +25,11 @@ import { zipDirs } from "./zip.ts";
  * `fonts` in goldie.design.json so the CLI registers it, and is copied into
  * out/web so the studio can declare it at once. Responds with the manifest's
  * font entry for the family.
+ *
+ * POST /api/translate - translates copy with the local Claude Code CLI.
+ * Body: { from, to, appName, texts: { "<id>.<field>": text } }; responds with
+ * the same keys translated. The UI applies them as edits (undoable, saved
+ * with the rest of the design).
  *
  * POST /api/export - renders the final assets from the raw captures with the
  * chosen background and frame (goldie frame + preview + manifest), zips
@@ -238,6 +244,35 @@ export function fontsHandler({ paths }: StudioApi): Handler {
   };
 }
 
+/** Handles POST /api/translate. */
+export function translateHandler(): Handler {
+  return (req, res) => {
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.end("POST only");
+      return;
+    }
+    readBody(req).then(async (body) => {
+      try {
+        const { from, to, appName, texts } = JSON.parse(body || "{}");
+        if (
+          typeof from !== "string" ||
+          typeof to !== "string" ||
+          !texts ||
+          typeof texts !== "object"
+        )
+          throw new Error("Body needs from, to and texts.");
+        const out = await translateTexts(texts, from, to, { appName: String(appName ?? "") });
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(out));
+      } catch (err) {
+        res.statusCode = 500;
+        res.end(err instanceof Error ? err.message : String(err));
+      }
+    });
+  };
+}
+
 /** Handles /api/export and /api/export/download. `sub` is the path after /api/export. */
 export function exportHandler({ paths, cli }: StudioApi): (sub: string) => Handler {
   let busy = false;
@@ -304,7 +339,11 @@ export function exportHandler({ paths, cli }: StudioApi): (sub: string) => Handl
         }
         res.write("$ zip screenshots + previews\n");
         await rm(paths.exportZip, { force: true });
-        const count = await zipDirs(paths.outDir, ["screenshots", "previews"], paths.exportZip);
+        const count = await zipDirs(
+          paths.outDir,
+          ["screenshots", "previews", "feature-graphic"],
+          paths.exportZip,
+        );
         res.write(`  ${count} files\n`);
         res.write("[done]\n");
       } catch (err) {
@@ -403,12 +442,14 @@ export function serveStudio(api: StudioApi, port = 4321): Promise<string> {
   const design = designHandler(api);
   const exp = exportHandler(api);
   const fonts = fontsHandler(api);
+  const translate = translateHandler();
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
     if (path === "/api/design") return design(req, res);
     if (path === "/api/fonts") return fonts(req, res);
+    if (path === "/api/translate") return translate(req, res);
     if (path.startsWith("/api/export")) return exp(path.slice("/api/export".length))(req, res);
 
     const file = fileIn(api.paths.webDir, path) ?? fileIn(STUDIO_DIST, path);

@@ -7,8 +7,9 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
+import { FeatureGraphic } from "./components/FeatureGraphic";
 import { Sidebar } from "./components/Sidebar";
-import { Strip } from "./components/Strip";
+import { copyColors, Strip } from "./components/Strip";
 import { useHistory } from "./lib/useHistory";
 import {
   type BundledFont,
@@ -17,6 +18,7 @@ import {
   type DeviceEntry,
   type DeviceType,
   deviceTypeOf,
+  FEATURE_GRAPHIC_ID,
   loadDesign,
   loadManifest,
   ManifestError,
@@ -24,6 +26,7 @@ import {
   type SceneCopy,
   type StoreManifest,
   saveDesign,
+  translateCopy,
   uploadFont,
 } from "./manifest";
 
@@ -128,10 +131,9 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     const devices = manifest.devices.filter((d) => deviceTypeOf(d) === t);
     if (devices.length > 0 && !devices.some((d) => d.key === device)) setDevice(devices[0]!.key);
   };
+  const initialLocales = saved.locales?.length ? saved.locales : manifest.locales;
   const [locale, setLocale] = useState(
-    view.locale && manifest.locales.includes(view.locale)
-      ? view.locale
-      : (manifest.locales[0] ?? ""),
+    view.locale && initialLocales.includes(view.locale) ? view.locale : (initialLocales[0] ?? ""),
   );
   const [dark, setDark] = useState(
     new URLSearchParams(window.location.search).get("dark") === "1" || view.dark === true,
@@ -152,6 +154,8 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     screenOnly: saved.screenOnly ?? design.screenOnly,
     sceneLayouts: initialSceneLayouts(design, saved, knownLayout),
     order: initialOrder(design, saved),
+    locales: initialLocales,
+    bannerLayout: saved.featureGraphic?.layout ?? design.featureGraphic?.layout ?? "split",
   }));
   const {
     background,
@@ -164,6 +168,8 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     screenOnly,
     sceneLayouts,
     order,
+    locales,
+    bannerLayout,
   } = state;
   // Each setter names its field so a burst of edits to one control (a drag
   // on the gradient picker) collapses into a single undo step.
@@ -190,6 +196,8 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     return font;
   };
   const setLayout = field("layout");
+  const setLocales = field("locales");
+  const setBannerLayout = field("bannerLayout");
   // Picking a template replaces the strip's layout sequence, so any per-scene
   // overrides made against the previous one are dropped with it.
   const setTemplate = (value: string) =>
@@ -215,6 +223,66 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
         },
       },
     }));
+
+  // Copy as shown: studio edits over the config's copy, per id and field.
+  const textOf = (id: string, fieldName: "headline" | "subhead", code: string) => {
+    const edited = copy[id]?.[fieldName]?.[code];
+    if (edited !== undefined) return edited;
+    if (id === FEATURE_GRAPHIC_ID) return design.featureGraphic?.[fieldName][code];
+    return design.scenes.find((sc) => sc.id === id)?.[fieldName]?.[code];
+  };
+  const copyKeys = [
+    ...design.scenes.flatMap((sc) => [
+      [sc.id, "headline"] as const,
+      ...(sc.subhead ? [[sc.id, "subhead"] as const] : []),
+    ]),
+    ...(design.featureGraphic
+      ? [[FEATURE_GRAPHIC_ID, "headline"] as const, [FEATURE_GRAPHIC_ID, "subhead"] as const]
+      : []),
+  ];
+  const sourceLocale = locales[0] ?? locale;
+  const missingIn = (code: string) =>
+    copyKeys.filter(([id, f]) => textOf(id, f, sourceLocale) && textOf(id, f, code) === undefined)
+      .length;
+
+  // Translations land as ordinary copy edits: undoable and saved with the design.
+  const [translating, setTranslating] = useState<string | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+  const translate = async (codes: string[]) => {
+    setTranslateError(null);
+    for (const code of codes) {
+      const texts: Record<string, string> = {};
+      for (const [id, f] of copyKeys) {
+        const text = textOf(id, f, sourceLocale);
+        if (text && textOf(id, f, code) === undefined) texts[`${id}.${f}`] = text;
+      }
+      if (Object.keys(texts).length === 0) continue;
+      setTranslating(code);
+      try {
+        const done = await translateCopy({
+          from: sourceLocale,
+          to: code,
+          appName: manifest.app.name,
+          texts,
+        });
+        set(`translate:${code}`, (prev) => {
+          const next = { ...prev.copy };
+          for (const [key, text] of Object.entries(done)) {
+            const dot = key.lastIndexOf(".");
+            const id = key.slice(0, dot);
+            const f = key.slice(dot + 1) as "headline" | "subhead";
+            next[id] = { ...next[id], [f]: { ...next[id]?.[f], [code]: text } };
+          }
+          return { ...prev, copy: next };
+        });
+      } catch (e) {
+        setTranslateError(e instanceof Error ? e.message : String(e));
+        break;
+      } finally {
+        setTranslating(null);
+      }
+    }
+  };
 
   useEffect(() => {
     storeView(manifest.app.name, { deviceType, device, locale, dark });
@@ -243,6 +311,11 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
         layout,
         screenOnly,
         sceneLayouts: Object.keys(sceneLayouts).length > 0 ? sceneLayouts : undefined,
+        locales: sameList(locales, manifest.locales) ? undefined : locales,
+        featureGraphic:
+          design.featureGraphic && bannerLayout !== design.featureGraphic?.layout
+            ? { layout: bannerLayout }
+            : undefined,
       }).then(
         () => setSaveError(null),
         (e: Error) => setSaveError(e.message),
@@ -260,6 +333,11 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     layout,
     screenOnly,
     sceneLayouts,
+    locales,
+    bannerLayout,
+    // Loaded once; listed so the comparisons above stay honest.
+    manifest.locales,
+    design.featureGraphic,
   ]);
 
   useEffect(() => {
@@ -300,6 +378,15 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
     ? `frames/${frame}.png`
     : (design.customFrameUrl ?? `frames/${design.frameVariants[0]}.png`);
 
+  // The feature graphic belongs to Google Play, so it shows on the android tabs.
+  const fg = design.featureGraphic;
+  const showBanner = Boolean(fg) && deviceType !== "iphone";
+  const bannerSpec = fg ? manifest.devices.find((d) => d.key === fg.device) : undefined;
+  const bannerCaptures = fg
+    ? (design.localeCaptures?.[fg.device]?.[locale] ?? design.captures[fg.device])
+    : undefined;
+  const bannerColors = copyColors(design.theme, fg?.background ?? background);
+
   return (
     <div className="flex h-full bg-stage p-3 text-foreground">
       <Sidebar
@@ -307,6 +394,15 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
         deviceType={deviceType}
         device={device}
         locale={locale}
+        locales={locales}
+        onLocales={setLocales}
+        missing={missingIn}
+        translating={translating}
+        translateError={translateError}
+        onTranslate={translate}
+        showBanner={showBanner}
+        bannerLayout={bannerLayout}
+        onBannerLayout={setBannerLayout}
         dark={dark}
         onDeviceType={selectDeviceType}
         onDevice={setDevice}
@@ -333,12 +429,33 @@ function Loaded({ manifest, saved }: { manifest: StoreManifest; saved: SavedDesi
       <div className="flex min-w-0 flex-1 flex-col">
         <main className="relative grid flex-1 place-items-center overflow-auto p-10">
           {spec && captures ? (
-            <div className="w-full max-w-[1400px]">
+            <div className="flex w-full max-w-[1400px] flex-col gap-8">
+              {showBanner ? (
+                <div className="mx-auto w-full max-w-[720px]">
+                  <FeatureGraphic
+                    design={design}
+                    layoutKey={bannerLayout}
+                    locale={locale}
+                    locales={locales}
+                    captures={bannerCaptures}
+                    spec={bannerSpec}
+                    frameUrl={frameUrl}
+                    background={background}
+                    fontFamily={previewFontFamily}
+                    headlineColor={bannerColors.headlineColor}
+                    subheadColor={bannerColors.subheadColor}
+                    screenOnly={screenOnly}
+                    copy={copy}
+                    onCopy={setSceneCopy}
+                  />
+                </div>
+              ) : null}
               <Strip
                 design={design}
                 captures={captures}
                 spec={spec}
                 locale={locale}
+                sourceLocale={sourceLocale}
                 background={background}
                 frameUrl={frameUrl}
                 fontFamily={previewFontFamily}
@@ -391,7 +508,14 @@ type DesignState = {
   sceneLayouts: Record<string, string>;
   /** Screenshot scene ids as arranged by dragging tiles; empty means the config's order. */
   order: string[];
+  /** The store languages, first is the translation source; saved when it differs from the config. */
+  locales: string[];
+  /** The feature graphic's banner layout key, or "custom" for the config's spec. */
+  bannerLayout: string;
 };
+
+const sameList = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
 
 function initialTemplate(design: Design, saved: SavedDesign): string {
   if (saved.template !== undefined && design.templates.some((t) => t.key === saved.template))

@@ -8,15 +8,19 @@ import {
   loadImage,
   type SKRSContext2D,
 } from "@napi-rs/canvas";
+import { bannerLayout, composeBanner, FEATURE_GRAPHIC } from "./banner.ts";
 import type { CaptureManifest } from "./capture.ts";
 import {
+  backgroundLuminance,
   canvasFontFiles,
+  copyFor,
   type Decoration,
   deviceFrame,
   fontFamilyFor,
   isPreview,
   type LoadedConfig,
   rawDir,
+  resolvedFeatureGraphic,
   resolvedScenes,
   type Theme,
 } from "./config.ts";
@@ -92,6 +96,7 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
     return { ...r, first };
   });
 
+  const missing: string[] = [];
   const files = await Promise.all(
     jobs.map(async ({ scene, layout, secondScene, first }) => {
       console.log(`  frame ${scene.id}`);
@@ -108,8 +113,10 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
 
       if (c.copy) {
         drawCopy(ctx, c.copy, { width: c.designWidth, height: c.height }, cfg, locale, {
-          headline: pick(scene.headline, locale, scene.id, "headline"),
-          subhead: scene.subhead ? pick(scene.subhead, locale, scene.id, "subhead") : undefined,
+          headline: pick(scene.headline, locale, cfg, scene.id, "headline", missing),
+          subhead: scene.subhead
+            ? pick(scene.subhead, locale, cfg, scene.id, "subhead", missing)
+            : undefined,
         });
       }
 
@@ -121,6 +128,7 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
         tile,
         locale,
         scene.id,
+        missing,
       );
 
       for (const device of c.devices) {
@@ -140,7 +148,117 @@ export async function renderScreenshots(cfg: LoadedConfig, deviceKey: DeviceKey,
       return out;
     }),
   );
+  warnMissing(locale, missing);
   return files.flat();
+}
+
+function warnMissing(locale: string, missing: string[]) {
+  if (missing.length === 0) return;
+  console.log(
+    `  ! ${locale} has no translation for ${[...new Set(missing)].join(", ")}; ` +
+      `used the first locale's copy. Translate: goldie translate --locale ${locale}`,
+  );
+}
+
+/**
+ * The Google Play feature graphic for one locale: the banner layout's copy
+ * and devices on the theme (or banner) background, 1024 x 500 with no
+ * alpha. Its devices show the chosen device's captures for the locale.
+ * Returns null when the config turns the banner off.
+ */
+export async function renderFeatureGraphic(cfg: LoadedConfig, locale: string) {
+  const fg = resolvedFeatureGraphic(cfg);
+  if (!fg) return null;
+  const outDir = join(cfg.outDir, "feature-graphic", locale);
+  await mkdir(outDir, { recursive: true });
+  console.log(`  feature graphic [${locale}]`);
+  registerFonts(canvasFontFiles(cfg));
+
+  const layout = bannerLayout(fg.layout);
+  const needsCaptures = layout.devices.length > 0;
+  const manifest = needsCaptures ? await readManifest(cfg, fg.device, locale) : null;
+  const spec = DEVICES[fg.device];
+  const { image, geom } = deviceFrame(cfg, fg.device);
+  const screenOnly = Boolean(cfg.theme.screenOnly || spec.screenOnly);
+  const bezel = screenOnly || !needsCaptures ? null : await loadImage(image);
+  const c = composeBanner(layout, { screenOnly, geom });
+
+  const canvas = createCanvas(c.width, c.height);
+  const ctx = canvas.getContext("2d");
+  // The feature graphic may not be transparent, so a transparent theme
+  // background falls back to white here.
+  const background = isTransparent(fg.background) ? "#FFFFFF" : fg.background;
+  ctx.fillStyle = paint(ctx, background, c.width, c.height);
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  const colors = bannerColors(cfg.theme, background);
+  const missing: string[] = [];
+  const shots = manifest?.screenshots ?? [];
+  const captureFor = (index: number) => {
+    const sceneId = fg.scenes[index % Math.max(fg.scenes.length, 1)];
+    return shots.find((s) => s.sceneId === sceneId) ?? shots[index % Math.max(shots.length, 1)];
+  };
+  for (const device of c.devices) {
+    const shot = captureFor(device.capture);
+    if (!shot)
+      throw new Error(`No capture for the feature graphic on ${fg.device}. Run: goldie capture`);
+    // Shadows scale from a phone-tile width comparable to the banner's device size.
+    const placed = { ...device, capture: "primary" as const };
+    drawDevice(ctx, placed, await loadImage(shot.file), bezel, { width: c.height * 0.9 });
+  }
+
+  if (c.copy) {
+    const family = withGlyphFallback(fontFamilyFor(cfg.theme, locale), cfg.fonts);
+    ctx.direction = isRtl(locale) ? "rtl" : "ltr";
+    const headline =
+      copyFor(fg.headline, locale, cfg.locales, missing, "feature graphic headline") ?? "";
+    const subhead = copyFor(fg.subhead, locale, cfg.locales, missing, "feature graphic subhead");
+    const blocks = [
+      {
+        text: headline,
+        font: `${BANNER_WEIGHTS.headline} ${c.copy.headlineSize}px ${family}`,
+        color: colors.headline,
+        lineHeight: 1.08,
+      },
+      ...(subhead
+        ? [
+            {
+              text: subhead,
+              font: `${BANNER_WEIGHTS.subhead} ${c.copy.subheadSize}px ${family}`,
+              color: colors.subhead,
+              lineHeight: 1.3,
+            },
+          ]
+        : []),
+    ].map((b) => ({ ...b, lines: wrapLines(ctx, b.text, b.font, 0, c.copy!.maxWidth) }));
+    const total =
+      blocks.reduce((sum, b) => sum + b.lines.length * fontSize(b.font) * b.lineHeight, 0) +
+      c.copy.gap * (blocks.length - 1);
+    let y = c.copy.y - total / 2;
+    for (const b of blocks) {
+      y = drawLines(ctx, { ...b, letterSpacing: 0, x: c.copy.x, y, align: c.copy.align });
+      y += c.copy.gap;
+    }
+    ctx.direction = "ltr";
+  }
+  warnMissing(locale, missing);
+  return writePng(canvas, outDir, "feature-graphic.png");
+}
+
+const BANNER_WEIGHTS = { headline: 700, subhead: 400 } as const;
+
+/** Copy colors that read on the banner background, by the rule applyDesign uses for --background. */
+function bannerColors(theme: Theme, background: string) {
+  const lum = backgroundLuminance(background);
+  const light = (c: string) => (backgroundLuminance(c) ?? 0) > 0.5;
+  if (lum !== null && lum < 0.5) return { headline: "#FFFFFF", subhead: "#D9E1EA" };
+  if (lum !== null) {
+    return {
+      headline: light(theme.headlineColor) ? "#0E1B2A" : theme.headlineColor,
+      subhead: light(theme.subheadColor) ? "#5A6A7D" : theme.subheadColor,
+    };
+  }
+  return { headline: theme.headlineColor, subhead: theme.subheadColor };
 }
 
 /**
@@ -289,10 +407,11 @@ async function drawDecorations(
   tile: { width: number; height: number },
   locale: string,
   sceneId: string,
+  missing: string[],
 ) {
   for (const d of decorations) {
     if (d.kind === "badge") {
-      const text = pick(d.text, locale, sceneId, "badge");
+      const text = pick(d.text, locale, cfg, sceneId, "badge", missing);
       const font = `${BADGE.weight} ${tile.width * BADGE.fontSize}px ${withGlyphFallback(fontFamilyFor(cfg.theme, locale), cfg.fonts)}`;
       ctx.font = font;
       ctx.letterSpacing = "0px";
@@ -387,7 +506,7 @@ function drawLines(
     letterSpacing: number;
     x: number;
     y: number;
-    align: "left" | "center";
+    align: "left" | "center" | "right";
   },
 ): number {
   ctx.font = o.font;
@@ -583,10 +702,17 @@ export async function renderPreview(cfg: LoadedConfig, deviceKey: DeviceKey, loc
   return final;
 }
 
-function pick(map: Record<string, string>, locale: string, sceneId: string, field: string): string {
-  const value = map[locale];
-  if (value === undefined)
-    throw new Error(`Scene "${sceneId}" has no ${field} for locale "${locale}".`);
+/** A scene's copy in the locale, or the first locale's with a note in `missing`. */
+function pick(
+  map: Record<string, string>,
+  locale: string,
+  cfg: LoadedConfig,
+  sceneId: string,
+  field: string,
+  missing: string[],
+): string {
+  const value = copyFor(map, locale, cfg.locales, missing, `${sceneId} ${field}`);
+  if (value === undefined) throw new Error(`Scene "${sceneId}" has no ${field} in any locale.`);
   return value;
 }
 
@@ -614,6 +740,7 @@ export async function verify(
   }
 
   // A null preview spec means no video pipeline; screenshots are the whole story.
+  // (The feature graphic is per locale, not per device: see verifyFeatureGraphic.)
   const previewSpec = spec.preview;
   if (!previewSpec) return ok;
 
@@ -669,6 +796,26 @@ export async function verify(
   }
 
   return ok;
+}
+
+/** Checks the feature graphic against Play's rule: 1024 x 500, no alpha. */
+export async function verifyFeatureGraphic(cfg: LoadedConfig, locale: string): Promise<boolean> {
+  if (!resolvedFeatureGraphic(cfg)) return true;
+  const file = join(cfg.outDir, "feature-graphic", locale, "feature-graphic.png");
+  const info = await pngInfo(file).catch(() => null);
+  if (!info) {
+    console.log(`  FAIL feature-graphic.png [${locale}]  missing (run: goldie banner)`);
+    return false;
+  }
+  const good =
+    info.width === FEATURE_GRAPHIC.width &&
+    info.height === FEATURE_GRAPHIC.height &&
+    !info.hasAlpha;
+  console.log(
+    `  ${good ? "ok  " : "FAIL"} feature-graphic.png [${locale}]  ${info.width}x${info.height}` +
+      `${info.hasAlpha ? "  alpha channel present" : ""}${good ? "" : "  expected 1024x500, no alpha"}`,
+  );
+  return good;
 }
 
 /** Absolute paths of the files in `dir` with the extension, sorted; empty when the dir is missing. */

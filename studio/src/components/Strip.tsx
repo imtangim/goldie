@@ -77,6 +77,7 @@ export function Strip({
   captures,
   spec: tileSpec,
   locale,
+  sourceLocale,
   background,
   frameUrl,
   fontFamily,
@@ -94,6 +95,8 @@ export function Strip({
   captures: DeviceCaptures;
   spec: DeviceEntry;
   locale: string;
+  /** Untranslated copy falls back to this locale's, as the export does. */
+  sourceLocale: string;
   background: string;
   frameUrl: string;
   fontFamily: string;
@@ -143,20 +146,7 @@ export function Strip({
   // to light, a light background flips light copy colors to dark, and
   // per-scene background overrides are dropped, so the export matches what
   // is on screen.
-  const bgLum = backgroundLuminance(background);
-  const dark = bgLum !== null && bgLum < 0.5;
-  const light = bgLum !== null && bgLum >= 0.5;
-  const lightColor = (c: string) => (backgroundLuminance(c) ?? 0) > 0.5;
-  const headlineColor = dark
-    ? "#FFFFFF"
-    : light && lightColor(theme.headlineColor)
-      ? "#0E1B2A"
-      : theme.headlineColor;
-  const subheadColor = dark
-    ? "#D9E1EA"
-    : light && lightColor(theme.subheadColor)
-      ? "#5A6A7D"
-      : theme.subheadColor;
+  const { headlineColor, subheadColor } = copyColors(theme, background);
 
   const allShots = scenes.flatMap((scene) => {
     const capture = captures.screenshots.find((s) => s.sceneId === scene.id);
@@ -251,8 +241,19 @@ export function Strip({
             frameUrl={deviceFrameUrl}
             geom={geom}
             fontFamily={fontFamily}
-            headline={copy[scene.id]?.headline?.[locale] ?? scene.headline[locale] ?? ""}
-            subhead={copy[scene.id]?.subhead?.[locale] ?? scene.subhead?.[locale]}
+            headline={
+              copy[scene.id]?.headline?.[locale] ??
+              scene.headline[locale] ??
+              copy[scene.id]?.headline?.[sourceLocale] ??
+              scene.headline[sourceLocale] ??
+              ""
+            }
+            subhead={
+              copy[scene.id]?.subhead?.[locale] ??
+              scene.subhead?.[locale] ??
+              copy[scene.id]?.subhead?.[sourceLocale] ??
+              scene.subhead?.[sourceLocale]
+            }
             headlineColor={headlineColor}
             subheadColor={subheadColor}
             captureUrl={capture.url}
@@ -628,7 +629,30 @@ function PagerButton({
 }
 
 /** Container-query units: 1cqw / 1cqh is one percent of a single tile. */
-const cq = (tile: { width: number; height: number }) => ({
+/** Copy colors that read on a background; mirrors applyDesign's --background handling in src/config.ts. */
+export function copyColors(
+  theme: Theme,
+  background: string,
+): { headlineColor: string; subheadColor: string } {
+  const bgLum = backgroundLuminance(background);
+  const dark = bgLum !== null && bgLum < 0.5;
+  const light = bgLum !== null && bgLum >= 0.5;
+  const lightColor = (c: string) => (backgroundLuminance(c) ?? 0) > 0.5;
+  return {
+    headlineColor: dark
+      ? "#FFFFFF"
+      : light && lightColor(theme.headlineColor)
+        ? "#0E1B2A"
+        : theme.headlineColor,
+    subheadColor: dark
+      ? "#D9E1EA"
+      : light && lightColor(theme.subheadColor)
+        ? "#5A6A7D"
+        : theme.subheadColor,
+  };
+}
+
+export const cq = (tile: { width: number; height: number }) => ({
   w: (v: number) => `${(v / tile.width) * 100}cqw`,
   h: (v: number) => `${(v / tile.height) * 100}cqh`,
 });
@@ -802,7 +826,7 @@ function ScreenshotScene({
  * over it, or a drop shadow under the bare screen when there is no bezel.
  * The box rotates about its centre, matching the canvas transform.
  */
-function DeviceView({
+export function DeviceView({
   device,
   tile,
   frameUrl,
@@ -938,7 +962,7 @@ function Decorations({
  * on blur or Enter (Shift+Enter keeps a line break, as the export honours
  * newlines); Escape restores the current value and leaves the field.
  */
-function editableProps(commit: (text: string) => void, current: string, label: string) {
+export function editableProps(commit: (text: string) => void, current: string, label: string) {
   return {
     contentEditable: "plaintext-only" as const,
     suppressContentEditableWarning: true,

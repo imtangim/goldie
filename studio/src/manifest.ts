@@ -1,4 +1,5 @@
 /** Mirrors the StoreManifest that `goldie manifest` writes to out/store.json. */
+import type { BannerLayout } from "../../src/banner";
 
 export type Theme = {
   background: string;
@@ -105,6 +106,19 @@ export type Design = {
   captures: Record<string, DeviceCaptures>;
   /** Localized captures per device key, then locale; absent without localizedCapture. */
   localeCaptures?: Record<string, Record<string, DeviceCaptures>>;
+  /** The Google Play feature graphic; null when the config turns it off. */
+  featureGraphic?: {
+    /** A built-in banner key, or "custom" with the config's spec in `custom`. */
+    layout: string;
+    custom: BannerLayout | null;
+    headline: Record<string, string>;
+    subhead: Record<string, string>;
+    /** null follows the strip's background. */
+    background: string | null;
+    scenes: string[];
+    device: string;
+  } | null;
+  bannerLayouts?: Array<{ key: string; label: string; description: string } & BannerLayout>;
 };
 
 export type StoreManifest = {
@@ -175,6 +189,10 @@ export type SavedDesign = {
   fontFamily?: string;
   /** Font stacks per locale; "" clears the config's override for that locale. */
   localeFonts?: Record<string, string>;
+  /** Languages as arranged in the studio; replaces the config's locales. */
+  locales?: string[];
+  /** Feature graphic choices: a banner layout key. */
+  featureGraphic?: { layout?: string };
   /** Copy edited in the lightbox, per screenshot scene id, then locale. */
   copy?: Record<string, SceneCopy>;
   /** Screenshot scene ids in the order the tiles were dragged into. */
@@ -219,6 +237,25 @@ export async function uploadFont(file: File, family: string, weight: number): Pr
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+/** Translates copy ("<id>.<field>" keys) through the studio server's local Claude Code CLI. */
+export async function translateCopy(body: {
+  from: string;
+  to: string;
+  appName: string;
+  texts: Record<string, string>;
+}): Promise<Record<string, string>> {
+  const res = await fetch("/api/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** The id feature graphic copy is saved under; mirrors FEATURE_GRAPHIC_ID in src/config.ts. */
+export const FEATURE_GRAPHIC_ID = "feature-graphic";
 
 /** Scripts written right to left; mirrors isRtl in src/render.ts. */
 export function isRtl(locale: string): boolean {

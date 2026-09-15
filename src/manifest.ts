@@ -11,6 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { BANNER_LAYOUTS, type BannerLayout, bannerLayout } from "./banner.ts";
 import type { CaptureManifest } from "./capture.ts";
 import {
   type Decoration,
@@ -21,6 +22,7 @@ import {
   isScreenshot,
   type LoadedConfig,
   rawDir,
+  resolvedFeatureGraphic,
   type Theme,
   variantFramePath,
 } from "./config.ts";
@@ -119,6 +121,18 @@ export type StoreManifest = {
     captures: Record<string, DeviceCaptures>;
     /** Localized captures per device key, then locale (localizedCapture). */
     localeCaptures: Record<string, Record<string, DeviceCaptures>>;
+    /** The Google Play feature graphic; null when it is off. */
+    featureGraphic: {
+      /** A built-in banner key, or "custom" with the config's spec in `custom`. */
+      layout: string;
+      custom: BannerLayout | null;
+      headline: Record<string, string>;
+      subhead: Record<string, string>;
+      background: string | null;
+      scenes: string[];
+      device: DeviceKey;
+    } | null;
+    bannerLayouts: Array<{ key: string; label: string; description: string } & BannerLayout>;
   };
 };
 
@@ -313,12 +327,30 @@ export async function writeManifest(cfg: LoadedConfig): Promise<string> {
         : null,
       captures,
       localeCaptures,
+      featureGraphic: featureGraphic(cfg),
+      bannerLayouts: Object.values(BANNER_LAYOUTS),
     },
   };
 
   const file = join(webDir, "store.json");
   await writeFile(file, JSON.stringify(manifest, null, 2));
   return file;
+}
+
+function featureGraphic(cfg: LoadedConfig): StoreManifest["design"]["featureGraphic"] {
+  const fg = resolvedFeatureGraphic(cfg);
+  if (!fg) return null;
+  const custom = typeof fg.layout === "object" ? bannerLayout(fg.layout) : null;
+  return {
+    layout: custom ? "custom" : (fg.layout as string),
+    custom,
+    headline: fg.headline,
+    subhead: fg.subhead,
+    // null follows the strip's background in the studio.
+    background: cfg.featureGraphic?.background ?? null,
+    scenes: fg.scenes,
+    device: fg.device,
+  };
 }
 
 async function readCaptureManifest(dir: string): Promise<CaptureManifest | null> {

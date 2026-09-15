@@ -121,6 +121,10 @@ scene list repeats. Built-ins:
 | `magazine` | offset, copy-below, tilt-right, hero, minimal |
 | `storyboard` | panorama-duo, copy-below, hero, minimal, tilt |
 | `dynamic` | tilt, duo-tilt, panorama, minimal, tilt-right |
+| `bold` | zoom, lean, stack, hero, zoom |
+| `clean` | float, copy-below, float, classic, minimal |
+| `playful` | lean, hang-tilt, duo-tilt, tilt-right, stack |
+| `gallery` | panorama-duo, stack, float, zoom, copy-below |
 
 Precedence per scene: `scenes[].layout`, then the template's entry, then
 `theme.layout`, then `classic`. Default to `editorial` for a 4 to 5 scene
@@ -141,6 +145,11 @@ strip, or write a sequence when the user describes the rhythm they want
 | `panorama` | two tiles, copy left, one big tilted device across the seam | takes 2 of the 10 slots |
 | `panorama-duo` | two tiles sharing a headline, a screen each side | a second capture, 2 slots |
 | `minimal` | no copy, a large centred device | |
+| `float` | copy on top, a smaller device floating in open space | |
+| `zoom` | copy on top, a very large device cropped by the bottom | |
+| `lean` | left-aligned copy, device leaning out of the bottom left | |
+| `hang-tilt` | tilted device hanging from the top, copy underneath | |
+| `stack` | two screens overlapping on a diagonal | a second capture |
 
 Two-screen layouts borrow the next scene's capture unless the scene sets
 `secondScene`. Choosing: lead with `classic`, `hero` or a `panorama` pair,
@@ -176,6 +185,8 @@ applies to every tile, `scenes[].decorations` to one; both stack.
 | Asset | Spec | Location |
 |---|---|---|
 | 6.9" screenshots | 1320x2868 PNG, no alpha | `out/screenshots/iphone-6.9/<locale>/` |
+| Play feature graphic | 1024x500 PNG, no alpha | `out/feature-graphic/<locale>/feature-graphic.png` |
+| Play tablet screenshots | 1440x2560 PNG, no alpha | `out/screenshots/pixel-tablet/<locale>/` |
 | 6.9" preview | 886x1920 H.264 30fps AAC, 15 to 30 s | `out/previews/iphone-6.9/<locale>/` |
 | Play phone screenshots | 1080x1920 PNG, no alpha | `out/screenshots/pixel-10-pro/<locale>/` |
 

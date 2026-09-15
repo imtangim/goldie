@@ -242,6 +242,9 @@ export function DesignPanel({
   localeFont,
   onLocaleFont,
   onUploadFont,
+  showBanner,
+  bannerLayout,
+  onBannerLayout,
   template,
   layout,
   screenOnly,
@@ -266,6 +269,9 @@ export function DesignPanel({
   localeFont: string;
   onLocaleFont: (v: string) => void;
   onUploadFont: (file: File, family: string, weight: number) => Promise<BundledFont>;
+  showBanner: boolean;
+  bannerLayout: string;
+  onBannerLayout: (v: string) => void;
   template: string;
   layout: string;
   screenOnly: boolean;
@@ -371,6 +377,21 @@ export function DesignPanel({
         ) : null}
         <FontUpload onUpload={onUploadFont} onUploaded={onFontFamily} />
       </Field>
+
+      {showBanner ? (
+        <Field label="Feature graphic" hint="1024x500, Google Play">
+          <Select
+            value={bannerLayout}
+            onChange={onBannerLayout}
+            options={[
+              ...(design.bannerLayouts ?? []).map((b): [string, string] => [b.key, b.label]),
+              ...(design.featureGraphic?.custom
+                ? [["custom", "Custom (from config)"] as [string, string]]
+                : []),
+            ]}
+          />
+        </Field>
+      ) : null}
 
       <Field label="Template">
         <TemplatePicker design={design} value={template} layout={layout} onChange={onTemplate} />

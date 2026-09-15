@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { BANNER_KEYS, type BannerLayout, bannerLayoutProblem, isBannerKey } from "./banner.ts";
 import { ANDROID_FRAME, ANDROID_TABLET_FRAME, FRAME } from "./frame.ts";
 import {
   type FrameGeometry,
@@ -168,6 +169,27 @@ export type CustomFont = {
   fallback?: string;
 };
 
+/**
+ * The Google Play feature graphic (1024 x 500), rendered per locale into
+ * out/feature-graphic/<locale>/feature-graphic.png. On by default whenever
+ * `devices` has an android device; set `enabled: false` to skip it.
+ */
+export type FeatureGraphic = {
+  enabled?: boolean;
+  /** A banner template key from src/banner.ts, or a custom { copy, devices } spec. Default "split". */
+  layout?: string | BannerLayout;
+  /** Headline per locale; defaults to the store name. */
+  headline?: Record<Locale, string>;
+  /** Subhead per locale; defaults to the store subtitle. */
+  subhead?: Record<Locale, string>;
+  /** Overrides the theme background for the banner. */
+  background?: string;
+  /** Screenshot scene ids whose captures fill the banner's devices, in order; defaults to the first scenes. */
+  scenes?: string[];
+  /** Device whose captures and bezel the banner shows; defaults to the first android device, else the first device. */
+  device?: DeviceKey;
+};
+
 export type GoldieConfig = {
   /** Absolute path to the app repo. Holds `.argent/flows`; also used for messages and for locating the build. */
   appRoot: string;
@@ -210,6 +232,8 @@ export type GoldieConfig = {
   localizedCapture?: boolean;
   /** Typefaces bundled with the config; see CustomFont. */
   fonts?: CustomFont[];
+  /** The Google Play feature graphic; see FeatureGraphic. */
+  featureGraphic?: FeatureGraphic;
   /** Simulator appearance for every capture. */
   appearance: "light" | "dark";
   /**
@@ -246,6 +270,8 @@ export type LoadedConfig = GoldieConfig & {
    * baked into `scene.layout` they would outrank every later template choice.
    */
   sceneLayouts?: Record<string, LayoutKey>;
+  /** Feature graphic copy edited in the studio or translated, layered over its defaults. */
+  featureGraphicCopy?: SceneCopy;
 };
 
 /**
@@ -294,6 +320,7 @@ export async function loadConfig(path = defaultConfigPath()): Promise<LoadedConf
   applyDesign(loaded, readDesign(path));
   framePath(loaded); // fail at load time on a bad variant or missing bezel PNG
   validateFonts(loaded);
+  validateFeatureGraphic(loaded);
   validateLayouts(loaded);
   return loaded;
 }
@@ -310,6 +337,10 @@ export type DesignOverrides = {
   fontFamily?: string;
   /** Font stacks per locale; merged over theme.localeFonts. An empty string clears a locale's override. */
   localeFonts?: Record<string, string>;
+  /** The locale list as arranged in the studio (added or removed languages); replaces `locales`. */
+  locales?: string[];
+  /** Feature graphic choices made in the studio. */
+  featureGraphic?: { layout?: string; enabled?: boolean; background?: string };
   /** Fonts uploaded in the studio, stored next to the config; appended to the config's `fonts`. */
   fonts?: CustomFont[];
   /** Copy edited in the studio, per screenshot scene id, then locale. */
@@ -344,6 +375,14 @@ export function readDesign(configPath: string): DesignOverrides {
   } catch (err) {
     throw new Error(`Unreadable ${file}: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+/** Writes the design sidecar atomically, the way the studio server does. */
+export function writeDesign(configPath: string, design: DesignOverrides): void {
+  const file = designPath(configPath);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(design, null, 2)}\n`);
+  renameSync(tmp, file);
 }
 
 /** Layers design overrides (the sidecar, or CLI flags) onto a loaded config. */
@@ -381,6 +420,24 @@ export function applyDesign(cfg: LoadedConfig, design: DesignOverrides): void {
     const known = new Set((cfg.fonts ?? []).map((f) => f.family));
     cfg.fonts = [...(cfg.fonts ?? []), ...design.fonts.filter((f) => !known.has(f.family))];
   }
+  if (design.locales?.length) cfg.locales = [...new Set(design.locales)];
+  if (design.featureGraphic) {
+    const fg = { ...cfg.featureGraphic };
+    if (design.featureGraphic.layout) fg.layout = design.featureGraphic.layout;
+    if (design.featureGraphic.enabled !== undefined) fg.enabled = design.featureGraphic.enabled;
+    if (design.featureGraphic.background) fg.background = design.featureGraphic.background;
+    cfg.featureGraphic = fg;
+  }
+  // Kept apart from featureGraphic so its defaults (the store name and
+  // subtitle) still fill the locales the edits do not cover.
+  const bannerCopy = design.copy?.[FEATURE_GRAPHIC_ID];
+  if (bannerCopy) {
+    const prev = cfg.featureGraphicCopy ?? {};
+    cfg.featureGraphicCopy = {
+      headline: { ...prev.headline, ...bannerCopy.headline },
+      subhead: { ...prev.subhead, ...bannerCopy.subhead },
+    };
+  }
   if (design.copy) {
     for (const scene of cfg.scenes) {
       const copy = design.copy[scene.id];
@@ -417,6 +474,78 @@ function checkedTemplate(key: string): TemplateChoice {
     throw new Error(`Unknown template "${key}". Available: ${TEMPLATE_KEYS.join(", ")}`);
   }
   return key;
+}
+
+/** The id feature graphic copy is stored under in goldie.design.json's `copy`. */
+export const FEATURE_GRAPHIC_ID = "feature-graphic";
+
+/** The feature graphic with its defaults filled in, or null when it is off. */
+export function resolvedFeatureGraphic(cfg: LoadedConfig): {
+  layout: string | BannerLayout;
+  headline: Record<Locale, string>;
+  subhead: Record<Locale, string>;
+  background: string;
+  scenes: string[];
+  device: DeviceKey;
+} | null {
+  const fg = cfg.featureGraphic ?? {};
+  const android = cfg.devices.find((d) => DEVICES[d].platform === "android");
+  if (fg.enabled === false || (fg.enabled === undefined && !android)) return null;
+  const device = fg.device ?? android ?? cfg.devices[0];
+  if (!device) return null;
+  const shots = cfg.scenes.filter(isScreenshot).map((s) => s.id);
+  const name = Object.fromEntries(cfg.locales.map((l) => [l, cfg.store.name]));
+  return {
+    layout: fg.layout ?? "split",
+    headline: { ...name, ...fg.headline, ...cfg.featureGraphicCopy?.headline },
+    subhead: {
+      ...(fg.subhead ?? cfg.store.subtitle ?? {}),
+      ...cfg.featureGraphicCopy?.subhead,
+    },
+    background: fg.background ?? cfg.theme.background,
+    scenes: fg.scenes?.length ? fg.scenes : shots.slice(0, 3),
+    device,
+  };
+}
+
+/** Fails early on a banner layout key that does not exist or a malformed custom spec. */
+export function validateFeatureGraphic(cfg: LoadedConfig): void {
+  const layout = cfg.featureGraphic?.layout;
+  if (typeof layout === "string" && !isBannerKey(layout)) {
+    throw new Error(
+      `Unknown feature graphic layout "${layout}". Available: ${BANNER_KEYS.join(", ")}, or a custom { copy, devices } spec`,
+    );
+  }
+  if (layout && typeof layout === "object") {
+    const problem = bannerLayoutProblem(layout);
+    if (problem) throw new Error(`featureGraphic.layout: ${problem}`);
+  }
+  const device = cfg.featureGraphic?.device;
+  if (device && !cfg.devices.includes(device)) {
+    throw new Error(
+      `featureGraphic.device "${device}" is not in devices (${cfg.devices.join(", ")}).`,
+    );
+  }
+}
+
+/**
+ * Copy for a locale, falling back to the first locale that has it, so a
+ * newly added language renders before it is translated. `missing` collects
+ * what fell back, for one warning per run.
+ */
+export function copyFor(
+  map: Record<string, string> | undefined,
+  locale: string,
+  locales: string[],
+  missing?: string[],
+  label?: string,
+): string | undefined {
+  if (!map) return undefined;
+  if (map[locale] !== undefined) return map[locale];
+  const source = [...locales, ...Object.keys(map)].find((l) => map[l] !== undefined);
+  if (source === undefined) return undefined;
+  if (missing && label) missing.push(label);
+  return map[source];
 }
 
 /** Where a device's raw captures live: shared, or one locale's when captured localized. */

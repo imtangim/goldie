@@ -197,11 +197,13 @@ export async function doctor(cfg: LoadedConfig): Promise<boolean> {
   checks.push({
     name: "translations",
     ok: missing.length === 0,
+    // Untranslated copy renders in the first locale, so this warns rather than fails.
+    warnOnly: true,
     detail:
       missing.length === 0
         ? `${cfg.locales.length} locale(s): ${cfg.locales.join(", ")}`
         : `missing ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? ` and ${missing.length - 6} more` : ""}`,
-    fix: "Add the missing entries in goldie.config.ts, or edit the copy per locale in goldie studio",
+    fix: "goldie translate (Claude Code CLI), add the entries to goldie.config.ts, or edit them in goldie studio",
   });
 
   for (const font of canvasFontFiles(cfg)) {
