@@ -68,7 +68,7 @@ goldie list       Every device, layout, template, banner layout and language cod
 The output goes to `out/screenshots/<device>/<locale>/` and
 `out/previews/<device>/<locale>/`. The iPhone gets 1320 x 2868 screenshots
 and an 886 x 1920 H.264 preview. Google Play gets 1080 x 1920 phone and
-1440 x 2560 tablet screenshots.
+2560 x 1440 tablet screenshots.
 A preview must run 15 to 30 seconds.
 
 ## Google Play
@@ -101,10 +101,14 @@ second window does not apply to it.
 ### Android tablets
 
 The `pixel-tablet` device key renders Google Play tablet screenshots
-(1440 x 2560, portrait) from the same scenes, framed with the bundled Pixel
-Tablet bezel. Create an AVD from the Pixel Tablet device definition; goldie
-pins it to portrait before capturing. `android.tabletFrame` swaps in your own
-art.
+(2560 x 1440, landscape) from the same scenes, framed with the bundled Pixel
+Tablet bezel. Create an AVD from the Pixel Tablet device definition.
+
+Tablet captures stay in the emulator's natural landscape orientation: argent
+reports element positions in the unrotated display space, so rotating the
+emulator makes every tap in a flow miss. Flows therefore replay against the
+app's landscape layout - if that layout differs from the phone's, give those
+scenes their own flows. `android.tabletFrame` swaps in your own art.
 
 ```ts
 devices: ["iphone-6.9", "pixel-10-pro", "pixel-tablet"],

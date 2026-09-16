@@ -8,7 +8,7 @@ import {
 } from "./config.ts";
 import { customFontKey, fontStack, withGlyphFallback } from "./fonts.ts";
 import { ANDROID_TABLET_FRAME } from "./frame.ts";
-import { compose, LAYOUTS } from "./layouts.ts";
+import { compose, LAYOUTS, TYPE } from "./layouts.ts";
 import { isRtl } from "./render.ts";
 import { DEVICES } from "./specs.ts";
 
@@ -68,12 +68,37 @@ describe("localization", () => {
 });
 
 describe("android tablet", () => {
-  test("spec is a portrait Play tablet within Play's size bounds", () => {
+  test("spec is a landscape Play tablet within Play's size bounds", () => {
     const spec = DEVICES["pixel-tablet"];
     expect(spec.formFactor).toBe("tablet");
     const { width, height } = spec.screenshot;
-    expect(height / width).toBeCloseTo(16 / 9, 3);
+    expect(width / height).toBeCloseTo(16 / 9, 3);
     expect(Math.min(width, height)).toBeGreaterThanOrEqual(1080);
+    expect(Math.max(width, height)).toBeLessThanOrEqual(7680);
+    // Rotating the emulator breaks argent's tap coordinates, so captures stay
+    // in the device's natural (landscape) orientation.
+    expect(spec.userRotation ?? 0).toBe(0);
+  });
+
+  test("a landscape tile composes in its own aspect, not the phone column", () => {
+    const tile = DEVICES["pixel-tablet"].screenshot;
+    const c = compose(
+      LAYOUTS.classic,
+      tile,
+      { copyHeightRatio: 0.24, deviceWidthRatio: 0.84 },
+      {
+        geom: ANDROID_TABLET_FRAME.geom,
+      },
+    );
+    // No portrait reference column: the device uses the full wide tile.
+    expect(c.devices[0]!.frame.width).toBeGreaterThan(tile.width * 0.5);
+    // Type scales from the height, so the headline stays near a phone tile's
+    // optical size instead of the 210px a 2560px-wide tile would give.
+    const headline = c.designWidth * TYPE.headlineSize;
+    expect(headline).toBeGreaterThan(80);
+    expect(headline).toBeLessThan(130);
+    // The copy block wraps at a readable measure, not the full 16:9 span.
+    expect(c.copy!.maxWidth).toBeLessThan(tile.width * 0.7);
   });
 
   test("the bezel composes inside the tile", () => {

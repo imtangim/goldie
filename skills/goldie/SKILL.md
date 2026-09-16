@@ -87,7 +87,7 @@ installed globally from the imtangim/goldie fork, so call the `goldie` binary
 directly; `npx -y goldie@0` would fetch the older npm release instead:
 
 ```bash
-goldie version   # 0.5.0 or newer
+goldie version   # 0.5.1 or newer
 ```
 
 If `goldie` is missing or older, install it from the fork:
@@ -261,11 +261,20 @@ Pixel 10 Pro bezel instead of the config's `frame` variant (iPhone art);
 portrait video for the user to post on YouTube themselves; no duration
 bounds apply to it.
 
-The `pixel-tablet` device key renders Play tablet screenshots (1440 x 2560,
-portrait) from the same scenes and flows. It needs an AVD with the
-`pixel_tablet` hardware profile; goldie pins its rotation to portrait before
-capturing and frames it with the bundled Pixel Tablet bezel
-(`android.tabletFrame` overrides it).
+The `pixel-tablet` device key renders Play tablet screenshots (2560 x 1440,
+**landscape**) from the same scenes, framed with the bundled Pixel Tablet
+bezel (`android.tabletFrame` overrides it). It needs an AVD with the
+`pixel_tablet` hardware profile.
+
+Tablet captures stay landscape on purpose: argent reports element positions
+in the unrotated display space, so an emulator pinned to portrait makes every
+tap miss and flows fail on their first step. Do not add a rotation pin to work
+around a layout you dislike. What this means for flows: they replay against
+the app's landscape tablet layout, which often places controls differently
+from the phone. Explore the tablet with argent before reusing phone flows, and
+give a scene its own flow (or `localeFlows`-style variant) when a selector or
+coordinate only exists in the phone layout. Verify a rendered tablet tile by
+eye before reporting done.
 
 ### The feature graphic (banner)
 
@@ -382,7 +391,7 @@ the next prompt can build on it.
 | A different or custom banner layout | `featureGraphic.layout`: a key from `goldie list`, or a `{ copy, devices }` spec | `banner`, `manifest` |
 | The app's own UI translated in each locale | `localizedCapture: true`, `localeFlows` for text-selector flows | `capture`, `frame`, `manifest` |
 | A custom font, or one per language | `fonts` plus `theme.fontFamily` / `theme.localeFonts` | `frame`, `manifest` |
-| Android tablet screenshots | add `pixel-tablet` to `devices` | `capture --device pixel-tablet`, `frame`, `manifest` |
+| Android tablet screenshots (landscape) | add `pixel-tablet` to `devices`; check flows against the tablet's landscape layout | `capture --device pixel-tablet`, `frame`, `manifest` |
 
 `capture` replays every flow; to re-capture only what changed, keep the
 other scenes as they are and accept the extra minute, or delete only the

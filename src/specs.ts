@@ -24,11 +24,15 @@ export type DeviceSpec = {
   formFactor: "phone" | "tablet";
   /**
    * Android only: the display rotation to pin before capturing (the
-   * `user_rotation` setting: 0 natural, 1 = 90°, 2 = 180°, 3 = 270°). The
-   * Pixel Tablet's natural orientation is landscape, so its portrait tiles
-   * pin rotation 1. Unset leaves the emulator's rotation alone.
+   * `user_rotation` setting: 0 natural, 1 = 90°, 2 = 180°, 3 = 270°), with
+   * auto-rotate turned off so the sensor cannot change it mid-flow.
+   *
+   * Only 0 is safe today: argent reports element positions in the unrotated
+   * display space, so on a rotated emulator every tap lands somewhere else
+   * and flows fail on their first step. A device that wants a non-natural
+   * orientation needs argent to map taps through the rotation first.
    */
-  userRotation?: 0 | 1 | 2 | 3;
+  userRotation?: 0;
   /**
    * `xcrun simctl` device type name; the toolkit picks the newest runtime that
    * has it. iOS only - android resolves a running emulator's adb serial instead.
@@ -82,19 +86,22 @@ export const DEVICES: Record<DeviceKey, DeviceSpec> = {
     // sliver; YouTube accepts any portrait size.
     preview: { width: 1080, height: 2400 },
   },
-  // Play's tablet screenshots (7- and 10-inch slots): 9:16 or 16:9, each side
-  // 1080-7680px. Captured in portrait on the Pixel Tablet emulator (2560x1600
-  // landscape natively, pinned to rotation 1) and framed with its portrait
-  // bezel art (src/frame.ts).
+  // Play's tablet screenshots (7- and 10-inch slots): 16:9 or 9:16, each side
+  // 1080-7680px. Landscape, which is how the Pixel Tablet emulator runs
+  // natively (2560x1600) and how tablet apps are usually shown: the rotation
+  // pin that would make portrait tiles breaks argent's tap coordinates (see
+  // userRotation), so the tile follows the device instead of the reverse.
+  // The 16:10 capture cover-crops to 16:9, trimming a sliver top and bottom.
   "pixel-tablet": {
     label: "Play tablet",
     platform: "android",
     formFactor: "tablet",
     avdDeviceNames: ["pixel_tablet"],
-    userRotation: 1,
+    userRotation: 0,
     native: null,
-    screenshot: { width: 1440, height: 2560 },
-    preview: { width: 1600, height: 2560 },
+    screenshot: { width: 2560, height: 1440 },
+    // Landscape 1080p: what YouTube expects for the Play promo video.
+    preview: { width: 1920, height: 1080 },
   },
 };
 

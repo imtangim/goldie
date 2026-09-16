@@ -186,7 +186,7 @@ applies to every tile, `scenes[].decorations` to one; both stack.
 |---|---|---|
 | 6.9" screenshots | 1320x2868 PNG, no alpha | `out/screenshots/iphone-6.9/<locale>/` |
 | Play feature graphic | 1024x500 PNG, no alpha | `out/feature-graphic/<locale>/feature-graphic.png` |
-| Play tablet screenshots | 1440x2560 PNG, no alpha | `out/screenshots/pixel-tablet/<locale>/` |
+| Play tablet screenshots | 2560x1440 PNG (landscape), no alpha | `out/screenshots/pixel-tablet/<locale>/` |
 | 6.9" preview | 886x1920 H.264 30fps AAC, 15 to 30 s | `out/previews/iphone-6.9/<locale>/` |
 | Play phone screenshots | 1080x1920 PNG, no alpha | `out/screenshots/pixel-10-pro/<locale>/` |
 

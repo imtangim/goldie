@@ -395,9 +395,11 @@ export async function clearStatusBar(key: DeviceKey, udid: string): Promise<void
 }
 
 /**
- * Pins the emulator's display rotation (a tablet whose natural orientation is
- * landscape captures portrait tiles at rotation 1). Auto-rotate is turned off
- * first, or the sensor would override the pin.
+ * Pins the emulator's display rotation and turns auto-rotate off, so the
+ * sensor cannot rotate the screen mid-flow. Only the natural orientation is
+ * pinned today: argent reports element positions in the unrotated display
+ * space, so a rotated emulator makes every tap miss (see userRotation in
+ * src/specs.ts).
  */
 export async function pinRotation(key: DeviceKey, udid: string): Promise<void> {
   const rotation = DEVICES[key].userRotation;

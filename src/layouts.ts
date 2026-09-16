@@ -420,6 +420,25 @@ export type Composition = {
  */
 const REF_TILE_ASPECT = 1320 / 2868;
 
+/**
+ * A landscape tile (the Play tablet) composes in its own aspect: the
+ * reference column above is a portrait-phone idea, and squeezing a 16:9 tile
+ * into it would leave a narrow strip of artwork centred in a sea of
+ * background.
+ */
+const isLandscape = (tile: { width: number; height: number }) => tile.width > tile.height;
+
+/**
+ * Type on a landscape tile scales from its height, not its width: the sizes
+ * in TYPE are fractions of a portrait tile's width, and a 2560px-wide tile
+ * would set a 210px headline whose block overflows the copy band. A fraction
+ * of the height lands near the phone tiles' optical size.
+ */
+const LANDSCAPE_TYPE_WIDTH = 0.92;
+
+/** Copy wrap width on a landscape tile: a readable measure, not the full 16:9 span. */
+const LANDSCAPE_COPY_WIDTH = 0.62;
+
 /** Bezel art geometry: the image box, the screen cutout inside it, its corner radius. */
 export type FrameGeometry = {
   width: number;
@@ -436,7 +455,7 @@ export function compose(
 ): Composition {
   const geom = opts.geom ?? FRAME;
   const tile =
-    tileIn.width / tileIn.height > REF_TILE_ASPECT + 1e-6
+    !isLandscape(tileIn) && tileIn.width / tileIn.height > REF_TILE_ASPECT + 1e-6
       ? { width: tileIn.height * REF_TILE_ASPECT, height: tileIn.height }
       : tileIn;
   const dx = (spec.span * (tileIn.width - tile.width)) / 2;
@@ -451,8 +470,16 @@ export function compose(
     spec.copy.position === "none"
       ? 0
       : tile.height * (isClassic ? theme.copyHeightRatio : (spec.copy.heightRatio ?? 0.24));
+  const land = isLandscape(tile);
+  // What type sizes and shadows scale from; the tile's own width on a
+  // portrait tile, a height-derived width on a landscape one.
+  const designWidth = land ? tile.height * LANDSCAPE_TYPE_WIDTH : tile.width;
   const padX = tile.width * TYPE.padX;
-  const maxWidth = spec.copy.widthRatio ? tile.width * spec.copy.widthRatio : tile.width - 2 * padX;
+  const maxWidth = spec.copy.widthRatio
+    ? tile.width * spec.copy.widthRatio
+    : land
+      ? tile.width * LANDSCAPE_COPY_WIDTH
+      : tile.width - 2 * padX;
 
   let copy: Composition["copy"] = null;
   if (spec.copy.position !== "none") {
@@ -522,7 +549,7 @@ export function compose(
     };
   });
 
-  return { width: tileIn.width * spec.span, height, copy, devices, designWidth: tile.width };
+  return { width: tileIn.width * spec.span, height, copy, devices, designWidth };
 }
 
 /** Whether a layout draws a second capture, which needs the scene's `secondScene`. */

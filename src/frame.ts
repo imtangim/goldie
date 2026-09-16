@@ -37,18 +37,19 @@ export const ANDROID_FRAME = {
 
 /**
  * The Pixel Tablet's bundled bezel art: the SDK's `pixel_tablet` skin
- * `back.webp` (2798x1837 landscape, display 2560x1600 at 119,117, already
- * transparent), rotated 90° clockwise into portrait so it frames the
- * portrait capture. Rotating moves the display to 120,119 inside a 1837x2798
- * box; the cutout radius is measured from the alpha (it matches the skin's
- * `mask.webp`).
+ * `back.webp` as it ships, landscape, with the display already transparent.
+ * The image box and display rect come from the skin's own `layout` file
+ * (2798x1837, display 2560x1600 at 119,117); the cutout radius is measured
+ * from the alpha and matches the skin's `mask.webp`. Landscape because the
+ * emulator captures that way: goldie cannot rotate it without breaking
+ * argent's tap coordinates (see userRotation in src/specs.ts).
  */
 export const ANDROID_TABLET_FRAME = {
   file: "pixel-tablet.webp",
   geom: {
-    width: 1837,
-    height: 2798,
-    screen: { x: 120, y: 119, width: 1600, height: 2560 },
+    width: 2798,
+    height: 1837,
+    screen: { x: 119, y: 117, width: 2560, height: 1600 },
     screenRadius: 32,
   },
 } as const;
