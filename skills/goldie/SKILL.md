@@ -87,7 +87,7 @@ installed globally from the imtangim/goldie fork, so call the `goldie` binary
 directly; `npx -y goldie@0` would fetch the older npm release instead:
 
 ```bash
-goldie version   # 0.5.1 or newer
+goldie version   # 0.5.2 or newer
 ```
 
 If `goldie` is missing or older, install it from the fork:

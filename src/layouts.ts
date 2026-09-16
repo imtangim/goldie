@@ -434,10 +434,24 @@ const isLandscape = (tile: { width: number; height: number }) => tile.width > ti
  * would set a 210px headline whose block overflows the copy band. A fraction
  * of the height lands near the phone tiles' optical size.
  */
-const LANDSCAPE_TYPE_WIDTH = 0.92;
+const LANDSCAPE_TYPE_WIDTH = 0.86;
 
-/** Copy wrap width on a landscape tile: a readable measure, not the full 16:9 span. */
-const LANDSCAPE_COPY_WIDTH = 0.62;
+/**
+ * Copy wrap width on a landscape tile: wide enough that a normal headline
+ * stays on one line (a wrapped one needs a taller band, below), but short of
+ * the full 16:9 span, which would read as a banner rather than a headline.
+ */
+const LANDSCAPE_COPY_WIDTH = 0.72;
+
+/**
+ * Least copy band on a landscape tile, as a fraction of its height. The
+ * band is where the copy sits before the device starts, and compose() cannot
+ * measure text, so it reserves room for a headline that wraps to two lines
+ * plus a subhead. Too small and the copy runs over the device below it: at
+ * the phone-tile 0.24 a 16:9 tile leaves only ~346px for a block that can
+ * need ~400.
+ */
+const LANDSCAPE_COPY_BAND = 0.3;
 
 /** Bezel art geometry: the image box, the screen cutout inside it, its corner radius. */
 export type FrameGeometry = {
@@ -466,11 +480,12 @@ export function compose(
     : { width: geom.width, height: geom.height, screen: geom.screen };
 
   const isClassic = spec.key === "classic";
+  const land = isLandscape(tile);
+  const bandRatio = isClassic ? theme.copyHeightRatio : (spec.copy.heightRatio ?? 0.24);
   const copyHeight =
     spec.copy.position === "none"
       ? 0
-      : tile.height * (isClassic ? theme.copyHeightRatio : (spec.copy.heightRatio ?? 0.24));
-  const land = isLandscape(tile);
+      : tile.height * (land ? Math.max(bandRatio, LANDSCAPE_COPY_BAND) : bandRatio);
   // What type sizes and shadows scale from; the tile's own width on a
   // portrait tile, a height-derived width on a landscape one.
   const designWidth = land ? tile.height * LANDSCAPE_TYPE_WIDTH : tile.width;

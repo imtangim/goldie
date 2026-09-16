@@ -98,7 +98,30 @@ describe("android tablet", () => {
     expect(headline).toBeGreaterThan(80);
     expect(headline).toBeLessThan(130);
     // The copy block wraps at a readable measure, not the full 16:9 span.
-    expect(c.copy!.maxWidth).toBeLessThan(tile.width * 0.7);
+    expect(c.copy!.maxWidth).toBeLessThan(tile.width * 0.8);
+  });
+
+  test("the copy band clears a two-line headline and a subhead", () => {
+    const tile = DEVICES["pixel-tablet"].screenshot;
+    const c = compose(
+      LAYOUTS.classic,
+      tile,
+      { copyHeightRatio: 0.24, deviceWidthRatio: 0.84 },
+      {
+        geom: ANDROID_TABLET_FRAME.geom,
+      },
+    );
+    // What drawCopy in src/render.ts lays out, for the worst normal case: a
+    // headline that wraps once. It must end above the device, or the copy
+    // renders over the tablet.
+    const headline = c.designWidth * TYPE.headlineSize;
+    const subhead = c.designWidth * TYPE.subheadSize;
+    const block =
+      2 * headline * TYPE.headlineLineHeight +
+      tile.height * TYPE.gap +
+      subhead * TYPE.subheadLineHeight;
+    const deviceTop = c.devices[0]!.frame.top;
+    expect(c.copy!.y + block).toBeLessThanOrEqual(deviceTop);
   });
 
   test("the bezel composes inside the tile", () => {
